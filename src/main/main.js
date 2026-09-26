@@ -214,8 +214,9 @@ handle('sessions:export', async (tree, exportPassword) => {
     filters: [{ name: 'Vytty sessions', extensions: ['json'] }],
   });
   if (res.canceled || !res.filePath) return null;
-  const out = { format: 'vytty-sessions', version: 1, folders: tree.folders, sessions: tree.sessions };
-  if (exportPassword) out.secrets = vault.exportSecrets(tree.sessions.map((s) => s.id), exportPassword);
+  const credentials = tree.credentials || [];
+  const out = { format: 'vytty-sessions', version: 1, folders: tree.folders, sessions: tree.sessions, credentials };
+  if (exportPassword) out.secrets = vault.exportSecrets([...tree.sessions.map((s) => s.id), ...credentials.map((c) => `cred:${c.id}`)], exportPassword);
   fs.writeFileSync(res.filePath, JSON.stringify(out, null, 2), 'utf8');
   return res.filePath;
 });

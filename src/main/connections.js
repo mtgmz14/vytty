@@ -60,6 +60,14 @@ class ConnectionManager {
   secretFor(session, overrides) {
     let secret = {};
     try { if (session.id) secret = this.vault.get(session.id); } catch { /* locked */ }
+    // No password of its own: fall back to the credential profile the UI resolved
+    // (picked explicitly or matched by username).
+    if (!secret.password && session.credentialId) {
+      try {
+        const cred = this.vault.get(`cred:${session.credentialId}`);
+        if (cred.password) secret = { ...secret, password: cred.password };
+      } catch { /* locked */ }
+    }
     return { ...secret, ...(overrides || {}) };
   }
 

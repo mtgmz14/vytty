@@ -225,6 +225,38 @@
     const pwToggle = el('button.icon-btn', { type: 'button', title: 'Show / hide', on: { click: () => { pw.type = pw.type === 'password' ? 'text' : 'password'; } } }, icon('key', 14));
     const passphrase = el('input.input', { type: 'password', value: secret.passphrase || '', placeholder: 'Only if the key is encrypted', disabled: vaultLocked, autocomplete: 'new-password' });
 
+    // Credential profile: auto (match by username), none, or a specific one.
+    const credSel = el('select.input');
+    const credHint = el('div.cred-hint');
+    const fillCreds = (value) => {
+      credSel.replaceChildren(
+        el('option', { value: '', text: 'Auto - match by username' }),
+        el('option', { value: 'none', text: 'None - use only this session\'s password' }),
+        ...(App.tree.credentials || []).map((c) => el('option', { value: c.id, text: `${c.name} (${c.username})` })),
+        el('option', { value: '__new', text: 'New credential…' }));
+      credSel.value = value || '';
+    };
+    fillCreds(s.credentialId);
+    const syncCred = () => {
+      const v = credSel.value;
+      const picked = v && v !== 'none' ? App.credential(v) : null;
+      f.username.disabled = !!picked;
+      if (picked) f.username.value = picked.username;
+      const match = v === '' ? App.credentialFor({ ...s, credentialId: null, protocol: s.protocol, username: f.username.value }) : picked;
+      credHint.replaceChildren();
+      if (match) credHint.append('Password comes from credential ', el('b', { text: match.name }), pw.value ? ' (the password below overrides it)' : '');
+      else if (v === '' && f.username.value.trim()) credHint.append('No credential for this username - the session password is used.');
+      pw.placeholder = match ? `From credential "${match.name}"` : (vaultLocked ? 'Vault locked' : 'Stored encrypted in the vault');
+    };
+    credSel.addEventListener('change', async () => {
+      if (credSel.value === '__new') {
+        const created = await App.Credentials.edit(null, { username: f.username.value.trim(), name: f.username.value.trim() });
+        fillCreds(created ? created.id : '');
+      }
+      syncCred();
+    });
+    pw.addEventListener('input', syncCred);
+
     const keyInput = input('keyPath', { placeholder: 'C:\\Users\\me\\.ssh\\id_ed25519' });
     const browseKey = el('button.btn', { type: 'button', on: { click: async () => { const p = await vytty.dialog.openFile({ title: 'Select private key' }); if (p) keyInput.value = p; } } }, 'Browse');
 
@@ -288,6 +320,7 @@
       picker,
       el('div.field-row', field('Name', input('name', { placeholder: 'e.g. core-sw01', autofocus: true })), field('Folder', select('folderId', folderOptions, s.folderId || ''))),
       el('div.field-row', { dataset: { only: 'ssh telnet' } }, field('Host', input('host', { placeholder: 'hostname or IP' })), field('Port', input('port'), null, '.narrow')),
+      el('div', { dataset: { only: 'ssh telnet serial' } }, field('Credential', credSel), credHint),
       el('div.field-row', { dataset: { only: 'ssh telnet serial' } },
         field('Username', input('username', { placeholder: 'optional' })),
         field('Password', el('div.with-btn', pw, pwToggle))),
@@ -331,6 +364,8 @@
 
     const body = el('div', tabBar, ...Object.values(panes));
     setProto(s.protocol);
+    f.username.addEventListener('input', syncCred);
+    syncCred();
 
     const collect = () => {
       const out = { ...s };
@@ -351,6 +386,7 @@
       out.startupCommands = f.startupCommands.value;
       out.notes = f.notes.value;
       out.jumpId = f.jumpId.value || null;
+      out.credentialId = credSel.value || null;
       out.keepalive = f.keepalive.value === '' ? undefined : Number(f.keepalive.value);
       out.forwards = [...fwdBox.children].map((r) => r._get()).filter((x) => x.listenPort);
       if (!out.name) out.name = out.protocol === 'serial' ? out.serialPath : out.protocol === 'local' ? (out.shell || 'Local shell') : out.host;

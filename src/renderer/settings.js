@@ -209,6 +209,9 @@
         box];
     };
 
+    // ----------------------------------------------------- credentials
+    sections.Credentials = () => App.Credentials.pane(rerender);
+
     // -------------------------------------------------------- sessions
     sections['Import / export'] = () => [
       el('h3', { text: 'Import / export sessions' }),
@@ -218,7 +221,7 @@
         el('button.btn', { type: 'button', on: { click: importSessions } }, icon('upload', 14), 'Import Vytty file…')),
       el('h4', { text: 'Import from MobaXterm' }),
       el('p.muted', { text: 'In MobaXterm: right-click "User sessions" → "Export all sessions to file", or right-click a folder → "Export sessions from this folder". Then import the .mxtsessions file here. Folders, hosts, ports, users, key paths and serial settings are imported.' }),
-      el('div.notice', { text: 'MobaXterm session files do not contain passwords - it keeps those encrypted in the Windows registry. After importing you can paste your passwords in bulk (below), or let Vytty save each one the first time you connect.' }),
+      el('div.notice', { text: 'MobaXterm session files do not contain passwords - it keeps those encrypted in the Windows registry. After importing, set one password per username (Settings → Credentials), paste passwords per host in bulk, or let Vytty save each one the first time you connect.' }),
       el('div', { style: { display: 'flex', gap: '8px' } },
         el('button.btn.primary', { type: 'button', on: { click: importMobaXterm } }, icon('upload', 14), 'Import MobaXterm sessions…'),
         el('button.btn', { type: 'button', on: { click: bulkPasswords } }, icon('key', 14), 'Add passwords in bulk…')),
@@ -237,7 +240,7 @@
       el('button.btn.small', { type: 'button', on: { click: () => vytty.win.devtools() } }, 'Developer tools'),
     ];
 
-    const icons = { Appearance: 'palette', 'Mouse & clipboard': 'copy', Highlighting: 'code', Logging: 'logs', Connections: 'server', 'Vault & security': 'lock', 'Import / export': 'download', About: 'info' };
+    const icons = { Appearance: 'palette', 'Mouse & clipboard': 'copy', Highlighting: 'code', Logging: 'logs', Connections: 'server', 'Vault & security': 'lock', Credentials: 'key', 'Import / export': 'download', About: 'info' };
     const nav = el('div.settings-nav');
     const content = el('div.settings-content');
     let current = sections[section] ? section : 'Appearance';
@@ -273,6 +276,17 @@
       App.tree.sessions.push({ ...s, id: idMap[s.id], folderId: s.folderId ? folderMap[s.folderId] || null : null, jumpId: s.jumpId || null });
     }
     for (const s of App.tree.sessions) if (s.jumpId && idMap[s.jumpId]) s.jumpId = idMap[s.jumpId];
+    const credMap = {};
+    if (!App.tree.credentials) App.tree.credentials = [];
+    for (const c of data.credentials || []) {
+      credMap[c.id] = uid();
+      idMap[`cred:${c.id}`] = `cred:${credMap[c.id]}`;
+      App.tree.credentials.push({ ...c, id: credMap[c.id] });
+    }
+    for (const s of data.sessions || []) {
+      const ns = App.session(idMap[s.id]);
+      if (ns && s.credentialId && s.credentialId !== 'none') ns.credentialId = credMap[s.credentialId] || null;
+    }
     if (data.secrets) {
       if (!App.vault.unlocked) toast('Vault locked - passwords were not imported', 'error');
       else {
@@ -322,11 +336,12 @@
       buttons: [{ label: 'Cancel', value: false }, { label: `Import ${data.sessions.length}`, value: true, primary: true }],
     });
     if (!ok) return;
-    mergeIntoTree(data.folders, data.sessions);
+    const idMap = mergeIntoTree(data.folders, data.sessions);
     await App.saveTree();
     toast(`Imported ${data.sessions.length} sessions from MobaXterm`, 'ok');
-    if (byType.length && await confirmBox('Add passwords?', 'Do you want to paste passwords for these sessions now? You can also do it later, or let Vytty save each password the first time you connect.', { okLabel: 'Add passwords', cancelLabel: 'Later' })) {
-      bulkPasswords();
+    const users = new Set(data.sessions.map((s) => s.username).filter(Boolean));
+    if (users.size && await confirmBox('Set passwords per username?', `The imported sessions use ${users.size} username${users.size > 1 ? 's' : ''} (${[...users].slice(0, 6).join(', ')}${users.size > 6 ? ', …' : ''}). Set one password for each and every session with that login will use it. You can also do it later in Settings → Credentials.`, { okLabel: 'Set passwords', cancelLabel: 'Later' })) {
+      await App.Credentials.perUser(new Set(Object.values(idMap)));
     }
   }
 

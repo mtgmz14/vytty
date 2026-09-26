@@ -39,11 +39,33 @@
     },
 
     // Attach jump host session object so the main process has everything.
+    credential(id) { return (App.tree.credentials || []).find((c) => c.id === id); },
+
+    // Which credential profile a session uses: the one picked in the session,
+    // none when set to 'none', otherwise the first "auto" profile whose
+    // username matches the session's username (like MobaXterm credentials).
+    credentialFor(s) {
+      if (!s || s.credentialId === 'none' || s.protocol === 'local') return null;
+      if (s.credentialId) return App.credential(s.credentialId) || null;
+      const user = (s.username || '').trim().toLowerCase();
+      if (!user) return null;
+      return (App.tree.credentials || []).find((c) => c.auto !== false && (c.username || '').toLowerCase() === user) || null;
+    },
+
+    // Copy of a session with its jump host and credential profile attached,
+    // so the main process has everything it needs to connect.
     resolveSession(s) {
-      const copy = JSON.parse(JSON.stringify(s));
+      const withCred = (src) => {
+        const copy = JSON.parse(JSON.stringify(src));
+        const cred = App.credentialFor(src);
+        copy.credentialId = cred ? cred.id : null;
+        if (cred && (src.credentialId === cred.id || !copy.username)) copy.username = cred.username;
+        return copy;
+      };
+      const copy = withCred(s);
       if (s.jumpId && s.jumpId !== s.id) {
         const j = App.session(s.jumpId);
-        if (j) copy.jump = { session: JSON.parse(JSON.stringify(j)) };
+        if (j) copy.jump = { session: withCred(j) };
       }
       return copy;
     },

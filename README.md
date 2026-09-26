@@ -41,6 +41,9 @@ portable executable: no installer, no registry, no AppData. Sessions, settings, 
 - AES-256-GCM, key derived with scrypt from a master password that is never stored
 - Optional "no master password" mode for convenience (clearly labelled as obfuscation only)
 - Passwords typed at connect time can be saved to the vault with one checkbox
+- **Credentials** (like MobaXterm user credentials): named username + password pairs. A session can pick one, or with
+  *auto* on, every session whose username matches uses that password, so one entry covers all devices with the same
+  login. A password saved in the session itself always wins.
 
 **Syntax highlighting**
 - Profiles: **Cisco IOS / IOS-XE (Catalyst)**, **Cisco NX-OS (Nexus)**, **Linux**, **Auto** (all of them) or none
@@ -89,7 +92,7 @@ The first start creates `VyttyData` next to the executable and asks you to set u
 
 In MobaXterm, right-click **User sessions → Export all sessions to file** (or a folder → *Export sessions from this folder*) to get a `.mxtsessions` file. In Vytty open **Settings → Import / export → Import MobaXterm sessions…** and pick that file. Folders (including nested ones), hostnames, ports, usernames, private-key paths, SSH gateways and serial parameters are imported in one go, for hundreds of sessions at a time. SSH, Telnet, Serial, Shell and SFTP sessions are mapped; RDP/VNC/browser and other types Vytty does not speak are skipped and counted in the summary.
 
-**Passwords:** MobaXterm session files never contain them — MobaXterm keeps passwords encrypted in the Windows registry, tied to your Windows account. After importing you can bring them across with **Add passwords in bulk…**: paste one line per session (`host user password`, `host password`, or `name password`, separated by Tab, comma or two spaces) and Vytty matches each to the imported session and stores it in its own encrypted vault. Or just let Vytty save each password the first time you connect.
+**Passwords:** MobaXterm session files never contain them — MobaXterm keeps passwords encrypted in the Windows registry, tied to your Windows account. Right after the import Vytty lists the usernames it found (e.g. `admin · 281 sessions`, `cisco · 12 sessions`) and lets you enter **one password per username**; each becomes an *auto* credential, so all 281 `admin` sessions log in with it. You can manage these later in **Settings → Credentials**. For per-host passwords there is also **Add passwords in bulk…**: paste one line per session (`host user password`, `host password`, or `name password`, separated by Tab, comma or two spaces) and Vytty matches each to the imported session and stores it in its own encrypted vault. Or just let Vytty save each password the first time you connect.
 
 ## Keyboard shortcuts
 
@@ -151,7 +154,6 @@ sandboxed with context isolation; all network and file access goes through a sma
 - Split panes inside a tab
 - X11 forwarding, RDP/VNC launchers
 - Recursive SFTP folder transfers
-- Session-level credential profiles shared by many devices
 
 ## Po polsku
 

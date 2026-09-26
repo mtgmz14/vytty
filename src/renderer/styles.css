@@ -254,6 +254,17 @@ select.input { padding-right: 4px; }
 .fwd-row select { flex: 0 0 90px; }
 .fwd-row input { min-width: 0; }
 
+/* credentials */
+.cred-list { display: flex; flex-direction: column; gap: 4px; }
+.cred-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.cred-row > .icon { color: var(--accent); }
+.cred-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cred-meta { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.peruser-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; padding-right: 4px; }
+.peruser-row { display: grid; grid-template-columns: 1fr 220px; gap: 10px; align-items: center; }
+.cred-hint { font-size: 11.5px; color: var(--muted); margin: -6px 0 12px; }
+.cred-hint b { color: var(--accent); font-weight: 600; }
+
 /* settings */
 .settings { display: flex; gap: 18px; min-height: 100%; }
 .settings-nav { flex: 0 0 150px; display: flex; flex-direction: column; gap: 2px; }

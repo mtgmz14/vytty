@@ -92,11 +92,12 @@ const store = {
   },
   getSessions() {
     const s = readJson(paths.sessions, null);
-    if (s && Array.isArray(s.sessions)) return { folders: s.folders || [], sessions: s.sessions };
-    return { folders: [], sessions: [] };
+    if (s && Array.isArray(s.sessions)) return { folders: s.folders || [], sessions: s.sessions, credentials: s.credentials || [] };
+    return { folders: [], sessions: [], credentials: [] };
   },
+  // credentials: [{ id, name, username, auto }] - passwords live in the vault as "cred:<id>".
   saveSessions(tree) {
-    writeJson(paths.sessions, { folders: tree.folders || [], sessions: tree.sessions || [] });
+    writeJson(paths.sessions, { folders: tree.folders || [], sessions: tree.sessions || [], credentials: tree.credentials || [] });
   },
   getKnownHosts() {
     return readJson(paths.knownHosts, {});
