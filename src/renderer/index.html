@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:">
+  <title>Vytty</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header id="titlebar">
+      <div class="brand"><span class="brand-mark"></span><span class="brand-name">Vytty</span></div>
+      <div id="quickconnect">
+        <span class="qc-icon"></span>
+        <input id="qc-input" type="text" spellcheck="false" placeholder="Quick connect: user@host:22 · telnet 10.0.0.1 · COM3 9600 · powershell   (Ctrl+Shift+K)">
+      </div>
+      <div class="toolbar" id="toolbar"></div>
+      <div class="win-controls" id="win-controls"></div>
+    </header>
+
+    <div id="main">
+      <aside id="sidebar">
+        <nav class="side-tabs" id="side-tabs"></nav>
+        <div class="side-panel" data-panel="sessions" id="panel-sessions"></div>
+        <div class="side-panel" data-panel="sftp" id="panel-sftp"></div>
+        <div class="side-panel" data-panel="snippets" id="panel-snippets"></div>
+      </aside>
+      <div id="resizer"></div>
+      <section id="workspace">
+        <div id="tabbar"><div id="tabs"></div><button id="tab-new" class="icon-btn" title="New tab"></button></div>
+        <div id="terminals">
+          <div id="welcome"></div>
+        </div>
+        <div id="findbar" class="hidden"></div>
+      </section>
+    </div>
+
+    <footer id="statusbar"></footer>
+  </div>
+
+  <div id="overlay"></div>
+  <div id="toasts"></div>
+
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
+  <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="../../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+  <script src="themes.js"></script>
+  <script src="highlight.js"></script>
+  <script src="ui.js"></script>
+  <script src="app.js"></script>
+  <script src="sessions.js"></script>
+  <script src="tabs.js"></script>
+  <script src="sftp.js"></script>
+  <script src="snippets.js"></script>
+  <script src="settings.js"></script>
+  <script src="boot.js"></script>
+</body>
+</html>
