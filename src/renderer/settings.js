@@ -215,7 +215,13 @@
       el('p.muted', { text: 'Export writes all folders and sessions to a JSON file. Passwords are included only when you give an export password (they are encrypted with it).' }),
       el('div', { style: { display: 'flex', gap: '8px' } },
         el('button.btn', { type: 'button', on: { click: exportSessions } }, icon('download', 14), 'Export…'),
-        el('button.btn', { type: 'button', on: { click: importSessions } }, icon('upload', 14), 'Import…')),
+        el('button.btn', { type: 'button', on: { click: importSessions } }, icon('upload', 14), 'Import Vytty file…')),
+      el('h4', { text: 'Import from MobaXterm' }),
+      el('p.muted', { text: 'In MobaXterm: right-click "User sessions" → "Export all sessions to file", or right-click a folder → "Export sessions from this folder". Then import the .mxtsessions file here. Folders, hosts, ports, users, key paths and serial settings are imported.' }),
+      el('div.notice', { text: 'MobaXterm session files do not contain passwords - it keeps those encrypted in the Windows registry. After importing you can paste your passwords in bulk (below), or let Vytty save each one the first time you connect.' }),
+      el('div', { style: { display: 'flex', gap: '8px' } },
+        el('button.btn.primary', { type: 'button', on: { click: importMobaXterm } }, icon('upload', 14), 'Import MobaXterm sessions…'),
+        el('button.btn', { type: 'button', on: { click: bulkPasswords } }, icon('key', 14), 'Add passwords in bulk…')),
     ];
 
     sections.About = () => [
@@ -278,6 +284,118 @@
     }
     await App.saveTree();
     toast(`Imported ${(data.sessions || []).length} sessions`, 'ok');
+  }
+
+  // Merge parsed folders + sessions into the tree under fresh ids.
+  // Returns idMap (source session id -> new id) so callers can attach secrets.
+  function mergeIntoTree(folders, sessions) {
+    const folderMap = {};
+    const idMap = {};
+    for (const f of folders || []) folderMap[f.id] = uid();
+    for (const f of folders || []) App.tree.folders.push({ id: folderMap[f.id], name: f.name, parentId: f.parentId ? folderMap[f.parentId] || null : null });
+    for (const s of sessions || []) {
+      idMap[s.id] = uid();
+      App.tree.sessions.push({ ...s, id: idMap[s.id], folderId: s.folderId ? folderMap[s.folderId] || null : null });
+    }
+    return idMap;
+  }
+
+  async function importMobaXterm() {
+    let data;
+    try { data = await vytty.sessions.importMobaXterm(); } catch (e) { toast(e.message, 'error'); return; }
+    if (!data) return;
+    if (!data.sessions.length) { toast('No importable sessions found in that file', 'error'); return; }
+
+    const st = data.stats;
+    const line = (label, n) => el('div', el('span', { text: label }), el('b', { style: { float: 'right' }, text: String(n) }));
+    const byType = Object.entries(st.byType).sort((a, b) => b[1] - a[1]);
+    const skipped = Object.entries(st.skipped || {}).filter(([, n]) => n > 0);
+    const ok = await modal({
+      title: 'Import from MobaXterm',
+      width: 460,
+      body: [
+        el('p', { text: `Found ${data.sessions.length} session${data.sessions.length === 1 ? '' : 's'} in ${data.folders.length} folder${data.folders.length === 1 ? '' : 's'}.` }),
+        el('div.kv', ...byType.flatMap(([t, n]) => [el('span.k', { text: t }), el('span.v', { text: String(n) })])),
+        skipped.length ? el('p.muted', { style: { marginTop: '10px' }, text: `Skipped (Vytty has no matching protocol): ${skipped.map(([t, n]) => `${n} ${t}`).join(', ')}.` }) : null,
+        el('p.muted', { text: 'They will be added to your session tree. Passwords are not in the file - add them afterwards.' }),
+      ],
+      buttons: [{ label: 'Cancel', value: false }, { label: `Import ${data.sessions.length}`, value: true, primary: true }],
+    });
+    if (!ok) return;
+    mergeIntoTree(data.folders, data.sessions);
+    await App.saveTree();
+    toast(`Imported ${data.sessions.length} sessions from MobaXterm`, 'ok');
+    if (byType.length && await confirmBox('Add passwords?', 'Do you want to paste passwords for these sessions now? You can also do it later, or let Vytty save each password the first time you connect.', { okLabel: 'Add passwords', cancelLabel: 'Later' })) {
+      bulkPasswords();
+    }
+  }
+
+  // Attach passwords in bulk. The user pastes one session per line:
+  //   host  user  password    or    host  password    or    name  password
+  // (separated by tab, comma, or 2+ spaces). Matches by host+user, then host, then name.
+  async function bulkPasswords() {
+    if (!App.vault.unlocked) {
+      toast('Unlock the vault first (status bar) to store passwords', 'error');
+      return;
+    }
+    const ta = el('textarea.input', { rows: 10, spellcheck: false, placeholder: 'core-sw01\tadmin\tS3cret!\n10.0.0.2, admin, hunter2\nweb-prod-01   r00tpass', style: { fontFamily: 'var(--mono)' } });
+    const res = await modal({
+      title: 'Add passwords in bulk',
+      width: 560,
+      body: [
+        el('p.muted', { text: 'One session per line. Columns separated by Tab, comma, or two or more spaces:' }),
+        el('div.kv',
+          el('span.k', { text: 'host  user  password' }), el('span.v', { text: 'matched by host + username' }),
+          el('span.k', { text: 'host  password' }), el('span.v', { text: 'matched by host' }),
+          el('span.k', { text: 'name  password' }), el('span.v', { text: 'matched by session name' })),
+        ta,
+        el('p.muted', { text: 'Passwords are stored in Vytty\'s encrypted vault. Nothing is sent anywhere.' }),
+      ],
+      buttons: [{ label: 'Cancel', value: null }, { label: 'Apply', value: 'apply', primary: true }],
+    });
+    if (res !== 'apply' || !ta.value.trim()) return;
+
+    const sessions = App.tree.sessions;
+    const byHostUser = new Map();
+    const byHost = new Map();
+    const byName = new Map();
+    for (const s of sessions) {
+      if (s.host) {
+        byHost.set(s.host.toLowerCase(), s);
+        if (s.username) byHostUser.set(`${s.host.toLowerCase()}|${s.username.toLowerCase()}`, s);
+      }
+      byName.set(s.name.toLowerCase(), s);
+    }
+
+    let matched = 0;
+    let unmatched = 0;
+    const fails = [];
+    for (const rawLine of ta.value.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const cols = line.split(/\t|\s{2,}|\s*,\s*/).map((c) => c.trim()).filter((c, i, a) => c !== '' || i < a.length - 1);
+      if (cols.length < 2) { unmatched++; fails.push(line); continue; }
+      const password = cols[cols.length - 1];
+      let session = null;
+      if (cols.length >= 3) session = byHostUser.get(`${cols[0].toLowerCase()}|${cols[1].toLowerCase()}`) || byHost.get(cols[0].toLowerCase());
+      if (!session) session = byHost.get(cols[0].toLowerCase()) || byName.get(cols[0].toLowerCase());
+      if (!session) { unmatched++; fails.push(cols[0]); continue; }
+      try {
+        const cur = await vytty.vault.get(session.id);
+        await vytty.vault.set(session.id, { ...cur, password });
+        matched++;
+      } catch (e) { fails.push(`${cols[0]}: ${e.message}`); }
+    }
+    await App.refreshVault();
+    toast(`Set ${matched} password${matched === 1 ? '' : 's'}${unmatched ? `, ${unmatched} not matched` : ''}`, matched ? 'ok' : 'error', 4000);
+    if (fails.length) {
+      modal({
+        title: 'Some lines were not matched',
+        width: 480,
+        body: [el('p.muted', { text: 'These lines did not match any imported session (check the host or name):' }), el('pre.hl-preview', { text: fails.slice(0, 40).join('\n') + (fails.length > 40 ? `\n… (${fails.length - 40} more)` : '') })],
+        buttons: [{ label: 'OK', primary: true }],
+      });
+    }
   }
 
   App.on('open-settings', (sec) => openSettings(sec));

@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('vytty', {
     export: (tree, pw) => call('sessions:export', tree, pw),
     importRead: () => call('sessions:importRead'),
     importSecrets: (blob, pw, idMap) => call('sessions:importSecrets', blob, pw, idMap),
+    importMobaXterm: () => call('sessions:importMobaXterm'),
   },
   vault: {
     status: () => call('vault:status'),

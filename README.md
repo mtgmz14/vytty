@@ -34,6 +34,7 @@ portable executable: no installer, no registry, no AppData. Sessions, settings, 
 - Quick connect bar: `user@host:22`, `ssh -p 2222 host`, `telnet 10.0.0.1 23`, `COM3 9600`, `powershell`
 - Duplicate, open all sessions in a folder, save a quick-connect tab as a session
 - Import / export (passwords optionally included, encrypted with an export password)
+- **Import from MobaXterm** (`.mxtsessions` / `MobaXterm.ini`): folders (nested), hosts, ports, users, key paths, SSH gateways and serial settings for hundreds of sessions at once; SSH/Telnet/Serial/Shell/SFTP mapped, other types skipped and reported
 
 **Password vault**
 - Every saved session can have its own password / key passphrase
@@ -83,6 +84,12 @@ Catppuccin Mocha, Gruvbox Dark, Solarized Dark, Solarized Light, Monokai, One Da
 
 Grab `Vytty-x.y.z-portable.exe` from the [Releases](https://github.com/mtgmz14/vytty/releases) page and run it.
 The first start creates `VyttyData` next to the executable and asks you to set up the vault.
+
+## Migrating from MobaXterm
+
+In MobaXterm, right-click **User sessions → Export all sessions to file** (or a folder → *Export sessions from this folder*) to get a `.mxtsessions` file. In Vytty open **Settings → Import / export → Import MobaXterm sessions…** and pick that file. Folders (including nested ones), hostnames, ports, usernames, private-key paths, SSH gateways and serial parameters are imported in one go, for hundreds of sessions at a time. SSH, Telnet, Serial, Shell and SFTP sessions are mapped; RDP/VNC/browser and other types Vytty does not speak are skipped and counted in the summary.
+
+**Passwords:** MobaXterm session files never contain them — MobaXterm keeps passwords encrypted in the Windows registry, tied to your Windows account. After importing you can bring them across with **Add passwords in bulk…**: paste one line per session (`host user password`, `host password`, or `name password`, separated by Tab, comma or two spaces) and Vytty matches each to the imported session and stores it in its own encrypted vault. Or just let Vytty save each password the first time you connect.
 
 ## Keyboard shortcuts
 

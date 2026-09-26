@@ -13,6 +13,7 @@ const { store } = require('./store');
 const { vault } = require('./vault');
 const logger = require('./logger');
 const { ConnectionManager, capabilities } = require('./connections');
+const mobaxterm = require('./mobaxterm');
 
 let win = null;
 let settings = store.getSettings();
@@ -226,6 +227,21 @@ handle('sessions:importRead', async () => {
   return data;
 });
 handle('sessions:importSecrets', (blob, password, idMap) => vault.importSecrets(blob, password, idMap));
+
+// Import a MobaXterm session file: pick, read as CP1252, parse to Vytty sessions.
+handle('sessions:importMobaXterm', async () => {
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Import MobaXterm sessions',
+    properties: ['openFile'],
+    filters: [
+      { name: 'MobaXterm sessions', extensions: ['mxtsessions', 'mobaxterm', 'moba', 'ini', 'txt'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (res.canceled || !res.filePaths[0]) return null;
+  const parsed = mobaxterm.parseFile(fs.readFileSync(res.filePaths[0]));
+  return { file: res.filePaths[0], ...parsed };
+});
 
 // Custom title bar controls
 ipcMain.on('win:minimize', () => win && win.minimize());
