@@ -14,6 +14,7 @@ const { vault } = require('./vault');
 const logger = require('./logger');
 const { ConnectionManager, capabilities } = require('./connections');
 const mobaxterm = require('./mobaxterm');
+const dragout = require('./dragout');
 
 let win = null;
 let settings = store.getSettings();
@@ -175,12 +176,40 @@ const getDragIcon = () => {
   return dragIcon;
 };
 handle('sftp:prepareDrag', async (id, items) => { await connections.prepareDrag(id, items); return true; });
-ipcMain.on('sftp:startDrag', async (e, id, items) => {
+// deferred = false: drag the already downloaded temp copies (small files).
+// deferred = true: drag empty placeholders, find where they were dropped and
+// download the real content there, with progress in the status bar.
+ipcMain.on('sftp:startDrag', async (e, id, items, deferred) => {
+  if (!deferred) {
+    try {
+      const files = await connections.prepareDrag(id, items);
+      e.sender.startDrag({ file: files[0], files, icon: getDragIcon() });
+    } catch (err) {
+      send('sftp:error', err.message);
+    }
+    return;
+  }
+  let ph;
   try {
-    const files = await connections.prepareDrag(id, items);
-    e.sender.startDrag({ file: files[0], files, icon: getDragIcon() });
+    ph = dragout.makePlaceholders(items);
   } catch (err) {
     send('sftp:error', err.message);
+    return;
+  }
+  const since = Date.now();
+  e.sender.startDrag({ file: ph.files[0], files: ph.files, icon: getDragIcon() });
+  const dest = await dragout.locateDrop(items[0], since);
+  try { fs.rmSync(ph.dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  if (!dest) {
+    send('sftp:dragResult', { ok: false, unknown: true, items });
+    return;
+  }
+  send('sftp:dragResult', { started: true, dest, count: items.length });
+  try {
+    await connections.sftpOp(id, 'downloadPaths', { items, localDir: dest });
+    send('sftp:dragResult', { ok: true, dest, count: items.length });
+  } catch (err) {
+    send('sftp:dragResult', { ok: false, dest, error: err.message });
   }
 });
 

@@ -67,6 +67,9 @@ portable executable: no installer, no registry, no AppData. Sessions, settings, 
 - SFTP side panel for the active SSH tab:
   - cached listings, so folders and tabs switch instantly; folders are prefetched when you hover them
   - **drag files out** to Explorer / the desktop to download, **drag files or whole folders in** to upload
+  - big files work too: drag a 10 GB video to the desktop and let go right away - the file appears there and
+    downloads in the background with progress in the status bar (small files are dragged as real files, so they
+    can also be dropped into other apps)
     (drop onto a folder row to upload into that folder, or onto the terminal to upload to the current folder)
   - multi-select (Ctrl / Shift), recursive folder download, upload and delete, rename, new folder, "cd here"
   - keyboard: Enter, Backspace (parent folder), Delete, F2, F5, Ctrl+A

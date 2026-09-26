@@ -222,8 +222,15 @@ class ConnectionManager {
     return !!accepted;
   }
 
-  async loadPrivateKey(session, secret) {
+  async loadPrivateKey(session, secret, warn) {
     if (!session.keyPath) return null;
+    // Imported sessions (e.g. from MobaXterm) may point at keys that are not on
+    // this machine: skip the key and fall back to password authentication.
+    if (!fs.existsSync(session.keyPath)) {
+      if (warn) warn(`[33m[Vytty] Private key not found: ${session.keyPath} - trying password[0m
+`);
+      return null;
+    }
     const raw = fs.readFileSync(session.keyPath);
     let passphrase = secret.passphrase;
     let parsed = sshUtils.parseKey(raw, passphrase);
@@ -280,7 +287,7 @@ class ConnectionManager {
         username = ans.value;
       }
       let keyInfo = null;
-      try { keyInfo = await this.loadPrivateKey(session, secret); } catch (e) { return reject(e); }
+      try { keyInfo = await this.loadPrivateKey(session, secret, onBanner); } catch (e) { return reject(e); }
 
       let password = secret.password;
       let askedPassword = false;

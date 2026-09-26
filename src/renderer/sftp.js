@@ -286,11 +286,17 @@
       const items = dragItems(row);
       if (items.length && items.every((i) => !i.isDir && i.size < 64 * 1024 * 1024)) vytty.sftp.prepareDrag(tab.connId, items).catch(() => {});
     });
-    // The native drag may only start while the button is still held; if the
-    // download takes longer than that, the files stay cached for the next drag.
+    // Two drag modes:
+    //  - small files already fetched on mousedown are dragged as real files,
+    //    so they can be dropped into any app (mail, chat, editor...);
+    //  - big files and folders are dragged as placeholders: drop them on the
+    //    desktop or an Explorer folder and the download runs there in the
+    //    background (progress in the status bar).
+    // The native drag may only start while the button is still held.
     let buttonDown = false;
     window.addEventListener('mousedown', (ev) => { if (ev.button === 0) buttonDown = true; }, true);
     window.addEventListener('mouseup', (ev) => { if (ev.button === 0) buttonDown = false; }, true);
+    const SMALL = 64 * 1024 * 1024;
     listEl.addEventListener('dragstart', async (ev) => {
       ev.preventDefault();
       const row = rowOf(ev);
@@ -298,15 +304,35 @@
       const t = tab;
       const items = dragItems(row);
       if (!items.length) return;
-      const label = items.length > 1 ? `${items.length} items` : items[0].path.split('/').pop();
-      try {
-        const slow = setTimeout(() => toast(`Preparing ${label} for drag…`, 'info', 1500), 250);
-        await vytty.sftp.prepareDrag(t.connId, items);
-        clearTimeout(slow);
-      } catch (err) { toast(`SFTP: ${err.message}`, 'error'); return; }
+      const small = items.every((i) => !i.isDir && i.size < SMALL);
+      if (small) {
+        // Use the real files if they are ready in a moment, else fall back to deferred.
+        const prep = vytty.sftp.prepareDrag(t.connId, items).then(() => true, () => false);
+        const ready = await Promise.race([prep, new Promise((r) => setTimeout(() => r(false), 400))]);
+        App.setTransfer(null);
+        if (!buttonDown) return;
+        vytty.sftp.startDrag(t.connId, items, !ready);
+      } else {
+        vytty.sftp.startDrag(t.connId, items, true);
+      }
+    });
+
+    vytty.sftp.onDragResult(async (r) => {
+      const where = r.dest ? r.dest.replace(/^.*[\\/](Desktop|Pulpit)$/i, 'Desktop') : '';
+      if (r.started) { toast(`Downloading ${r.count > 1 ? `${r.count} items` : 'file'} to ${where}…`, 'info', 2500); return; }
       App.setTransfer(null);
-      if (buttonDown) vytty.sftp.startDrag(t.connId, items);
-      else toast(`${label} is ready - drag it again to drop it`, 'ok', 2500);
+      if (r.ok) { toast(`Downloaded to ${r.dest}`, 'ok', 4000); return; }
+      if (r.error) { toast(`Download failed: ${r.error}`, 'error', 5000); return; }
+      if (r.unknown) {
+        // Dropped somewhere we can't see (another app, a network folder...).
+        const pick = await confirmBox('Where to save?', 'Vytty could not tell where the file was dropped. Choose a folder to download it to?', { okLabel: 'Choose folder…' });
+        if (!pick || !usable(tab)) return;
+        try {
+          const dir = await vytty.sftp.downloadTo(tab.connId, r.items);
+          if (dir) toast(`Downloaded to ${dir}`, 'ok');
+        } catch (err) { toast(`Download failed: ${err.message}`, 'error'); }
+        App.setTransfer(null);
+      }
     });
 
     // Drop from the OS: onto a folder row -> into that folder, elsewhere -> current folder.
