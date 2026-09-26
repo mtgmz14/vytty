@@ -3,6 +3,7 @@
 // Telnet (with a small option negotiator and auto-login), Serial and local shells.
 const net = require('net');
 const fs = require('fs');
+const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { StringDecoder } = require('string_decoder');
@@ -483,24 +484,100 @@ class ConnectionManager {
       case 'rmdir': return call('rmdir', args.path);
       case 'unlink': return call('unlink', args.path);
       case 'rename': return call('rename', args.from, args.to);
-      case 'download':
-      case 'upload': {
-        const fn = op === 'download' ? 'fastGet' : 'fastPut';
-        const [from, to] = op === 'download' ? [args.remote, args.local] : [args.local, args.remote];
-        const name = (op === 'download' ? args.remote : args.local).split(/[\\/]/).pop();
-        let last = 0;
-        return call(fn, from, to, {
-          step: (transferred, _chunk, total) => {
-            const now = Date.now();
-            if (now - last > 150 || transferred === total) {
-              last = now;
-              this.send('sftp:progress', id, { name, transferred, total, op });
-            }
-          },
-        });
+      case 'download': return this.transfer(id, call, 'download', args.remote, args.local);
+      case 'upload': return this.transfer(id, call, 'upload', args.local, args.remote);
+      // Upload local files and folders (recursively) into a remote directory.
+      case 'uploadPaths': {
+        let count = 0;
+        const put = async (local, remoteDir) => {
+          const name = path.basename(local);
+          const remote = path.posix.join(remoteDir, name);
+          const st = await fs.promises.stat(local);
+          if (st.isDirectory()) {
+            await call('mkdir', remote).catch(() => {});
+            for (const child of await fs.promises.readdir(local)) await put(path.join(local, child), remote);
+          } else {
+            await this.transfer(id, call, 'upload', local, remote);
+            count++;
+          }
+        };
+        for (const local of args.locals) await put(local, args.remoteDir);
+        return count;
+      }
+      // Download remote files and folders (recursively) into a local directory.
+      case 'downloadPaths': return this.downloadTree(id, call, args.items, args.localDir);
+      // Delete files, or folders with everything inside.
+      case 'remove': {
+        const rm = async (p, isDir) => {
+          if (!isDir) return call('unlink', p);
+          for (const e of await call('readdir', p)) {
+            await rm(path.posix.join(p, e.filename), (e.attrs.mode & 0o170000) === 0o040000);
+          }
+          return call('rmdir', p);
+        };
+        for (const it of args.items) await rm(it.path, it.isDir);
+        return true;
       }
       default: throw new Error(`Unknown SFTP op ${op}`);
     }
+  }
+
+  async downloadTree(id, call, items, localDir) {
+    const out = [];
+    const get = async (remote, isDir, targetDir) => {
+      const local = path.join(targetDir, path.posix.basename(remote));
+      if (isDir) {
+        await fs.promises.mkdir(local, { recursive: true });
+        for (const e of await call('readdir', remote)) {
+          await get(path.posix.join(remote, e.filename), (e.attrs.mode & 0o170000) === 0o040000, local);
+        }
+      } else {
+        await this.transfer(id, call, 'download', remote, local);
+      }
+      return local;
+    };
+    await fs.promises.mkdir(localDir, { recursive: true });
+    for (const it of items) out.push(await get(it.path, it.isDir, localDir));
+    return out;
+  }
+
+  // Single file transfer with throttled progress events.
+  transfer(id, call, op, from, to) {
+    const fn = op === 'download' ? 'fastGet' : 'fastPut';
+    const name = from.split(/[\\/]/).pop();
+    let last = 0;
+    return call(fn, from, to, {
+      step: (transferred, _chunk, total) => {
+        const now = Date.now();
+        if (now - last > 150 || transferred === total) {
+          last = now;
+          this.send('sftp:progress', id, { name, transferred, total, op });
+        }
+      },
+    });
+  }
+
+  // Download remote items into a per-drag temp folder so they can be dragged
+  // out to Explorer. Results are cached by path + size + mtime, so dragging
+  // the same file again is instant.
+  prepareDrag(id, items) {
+    this.dragCache = this.dragCache || new Map();
+    const key = `${id}|${items.map((i) => `${i.path}:${i.size}:${i.mtime}`).join('|')}`;
+    if (!this.dragCache.has(key)) {
+      const dir = path.join(os.tmpdir(), 'vytty-drag', crypto.randomBytes(6).toString('hex'));
+      const p = this.sftp(id)
+        .then((sftp) => {
+          const call = (fn, ...a) => new Promise((resolve, reject) => sftp[fn](...a, (err, res) => (err ? reject(err) : resolve(res))));
+          return this.downloadTree(id, call, items, dir);
+        })
+        .catch((err) => { this.dragCache.delete(key); throw err; });
+      this.dragCache.set(key, p);
+    }
+    return this.dragCache.get(key);
+  }
+
+  static cleanupDragTemp() {
+    try { fs.rmSync(path.join(os.tmpdir(), 'vytty-drag'), { recursive: true, force: true }); } catch { /* ignore */ }
   }
 
   // ---------------------------------------------------------------- Telnet

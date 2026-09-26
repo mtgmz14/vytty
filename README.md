@@ -60,8 +60,13 @@ portable executable: no installer, no registry, no AppData. Sessions, settings, 
 - Copy on select, paste on right click, paste on middle click (all configurable; Shift+right click = menu)
 - Confirmation before pasting multiple lines
 - **Multi-exec**: type once into every tab at the same time (per-tab opt-out)
-- SFTP side panel for the active SSH tab: browse, download, upload (also drag & drop files onto the terminal), rename, delete, mkdir, "cd here"
-- Snippets / macros sent with one click (`\n` = Enter, `\x03` = Ctrl+C)
+- SFTP side panel for the active SSH tab:
+  - cached listings, so folders and tabs switch instantly; folders are prefetched when you hover them
+  - **drag files out** to Explorer / the desktop to download, **drag files or whole folders in** to upload
+    (drop onto a folder row to upload into that folder, or onto the terminal to upload to the current folder)
+  - multi-select (Ctrl / Shift), recursive folder download, upload and delete, rename, new folder, "cd here"
+  - keyboard: Enter, Backspace (parent folder), Delete, F2, F5, Ctrl+A
+- Snippets / macros: the list starts empty; add your own and send them with one click (`\n` = Enter, `\x03` = Ctrl+C)
 - Press **R** in a disconnected tab to reconnect
 - Find in scrollback (regex, match case), Ctrl+wheel zoom, clickable links (Ctrl+click)
 - Tab rename, drag to reorder, color, activity indicator, close others / to the right

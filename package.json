@@ -1,7 +1,7 @@
 {
   "name": "vytty",
   "productName": "Vytty",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Portable SSH / Telnet / Serial terminal with session manager, encrypted password vault, daily logs and Cisco/Linux syntax highlighting.",
   "main": "src/main/main.js",
   "author": "Vytty contributors",

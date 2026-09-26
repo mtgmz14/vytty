@@ -55,12 +55,14 @@ const DEFAULT_SETTINGS = {
   confirmCloseConnected: true,
   sidebarWidth: 260,
   sidebarVisible: true,
-  snippets: [
-    { id: 'sn1', name: 'Cisco: show ip int brief', text: 'show ip interface brief\\n' },
-    { id: 'sn2', name: 'Cisco: terminal length 0', text: 'terminal length 0\\n' },
-    { id: 'sn3', name: 'Nexus: show int status', text: 'show interface status\\n' },
-    { id: 'sn4', name: 'Linux: system info', text: 'uname -a && uptime && df -h\\n' },
-  ],
+  snippets: [],
+};
+
+const LEGACY_SNIPPETS = {
+  sn1: 'Cisco: show ip int brief|show ip interface brief\\n',
+  sn2: 'Cisco: terminal length 0|terminal length 0\\n',
+  sn3: 'Nexus: show int status|show interface status\\n',
+  sn4: 'Linux: system info|uname -a && uptime && df -h\\n',
 };
 
 function deepMerge(base, over) {
@@ -79,7 +81,10 @@ function deepMerge(base, over) {
 
 const store = {
   getSettings() {
-    return deepMerge(DEFAULT_SETTINGS, readJson(paths.settings, {}));
+    const s = deepMerge(DEFAULT_SETTINGS, readJson(paths.settings, {}));
+    // 0.1.0 shipped example snippets; drop them unless the user edited them.
+    s.snippets = s.snippets.filter((sn) => !(LEGACY_SNIPPETS[sn.id] && LEGACY_SNIPPETS[sn.id] === `${sn.name}|${sn.text}`));
+    return s;
   },
   saveSettings(settings) {
     writeJson(paths.settings, settings);

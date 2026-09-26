@@ -1,7 +1,7 @@
 'use strict';
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, nativeTheme, nativeImage } = require('electron');
 const { paths, ensureDirs } = require('./paths');
 
 ensureDirs();
@@ -94,6 +94,7 @@ if (!gotLock) {
 
 app.on('window-all-closed', () => {
   connections.closeAll();
+  ConnectionManager.cleanupDragTemp();
   app.quit();
 });
 
@@ -150,9 +151,36 @@ handle('sftp:download', async (id, remote, suggestedName) => {
   await connections.sftpOp(id, 'download', { remote, local: res.filePath });
   return res.filePath;
 });
-handle('sftp:uploadPick', async () => {
-  const res = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] });
+handle('sftp:uploadPick', async (folders) => {
+  const res = await dialog.showOpenDialog(win, { properties: [folders ? 'openDirectory' : 'openFile', 'multiSelections'] });
   return res.canceled ? [] : res.filePaths;
+});
+// Download files/folders into a folder picked by the user.
+handle('sftp:downloadTo', async (id, items) => {
+  const res = await dialog.showOpenDialog(win, { title: 'Download to…', properties: ['openDirectory', 'createDirectory'] });
+  if (res.canceled || !res.filePaths[0]) return null;
+  await connections.sftpOp(id, 'downloadPaths', { items, localDir: res.filePaths[0] });
+  return res.filePaths[0];
+});
+
+// Drag out of the SFTP panel: the renderer starts fetching on mousedown
+// (prepare) and asks for the native drag on dragstart.
+let dragIcon = null;
+const getDragIcon = () => {
+  if (!dragIcon) {
+    const img = nativeImage.createFromPath(path.join(__dirname, '..', '..', 'build', 'icon.png'));
+    dragIcon = img.isEmpty() ? img : img.resize({ width: 32, height: 32 });
+  }
+  return dragIcon;
+};
+handle('sftp:prepareDrag', async (id, items) => { await connections.prepareDrag(id, items); return true; });
+ipcMain.on('sftp:startDrag', async (e, id, items) => {
+  try {
+    const files = await connections.prepareDrag(id, items);
+    e.sender.startDrag({ file: files[0], files, icon: getDragIcon() });
+  } catch (err) {
+    send('sftp:error', err.message);
+  }
 });
 
 handle('clipboard:read', () => clipboard.readText());

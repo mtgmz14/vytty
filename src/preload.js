@@ -51,7 +51,11 @@ contextBridge.exposeInMainWorld('vytty', {
   sftp: {
     op: (id, op, args) => call('sftp', id, op, args),
     download: (id, remote, name) => call('sftp:download', id, remote, name),
-    pickUpload: () => call('sftp:uploadPick'),
+    pickUpload: (folders) => call('sftp:uploadPick', !!folders),
+    downloadTo: (id, items) => call('sftp:downloadTo', id, items),
+    prepareDrag: (id, items) => call('sftp:prepareDrag', id, items),
+    startDrag: (id, items) => ipcRenderer.send('sftp:startDrag', id, items),
+    onError: (fn) => on('sftp:error', fn),
     onProgress: (fn) => on('sftp:progress', fn),
   },
   clipboard: {
