@@ -12,8 +12,33 @@
   const COLORS = ['', '#ff6b7a', '#f5a35b', '#f5c46b', '#4fd18b', '#5fd4e8', '#6c8cff', '#c792ea', '#ff79c6', '#9aa3b5'];
   const BAUDS = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 
-  let selectedId = null;
+  // Multi-selection: click selects one, Ctrl+click toggles, Shift+click selects a range.
+  const selected = new Set();
+  let anchorId = null;
   let filter = '';
+  const selectedSessions = () => App.tree.sessions.filter((s) => selected.has(s.id));
+  const visibleSessionIds = () => [...document.querySelectorAll('#panel-sessions .tree-row[data-session]')].map((r) => r.dataset.session);
+  function selectRow(id, e) {
+    if (e && e.shiftKey && anchorId) {
+      const ids = visibleSessionIds();
+      const [a, b] = [ids.indexOf(anchorId), ids.indexOf(id)].sort((x, y) => x - y);
+      if (a !== -1 && b !== -1) {
+        if (!e.ctrlKey && !e.metaKey) selected.clear();
+        ids.slice(a, b + 1).forEach((x) => selected.add(x));
+      }
+    } else if (e && (e.ctrlKey || e.metaKey)) {
+      if (selected.has(id)) selected.delete(id); else selected.add(id);
+      anchorId = id;
+    } else {
+      selected.clear();
+      selected.add(id);
+      anchorId = id;
+    }
+    paintSelection();
+  }
+  function paintSelection() {
+    for (const r of document.querySelectorAll('#panel-sessions .tree-row[data-session]')) r.classList.toggle('selected', selected.has(r.dataset.session));
+  }
   const collapsed = new Set(JSON.parse(localStorage.getItem('vytty.collapsed') || '[]'));
   const saveCollapsed = () => { try { localStorage.setItem('vytty.collapsed', JSON.stringify([...collapsed])); } catch { /* ignore */ } };
 
@@ -73,15 +98,23 @@
   }
 
   function sessionRow(s, sub) {
-    const row = el(`div.tree-row${selectedId === s.id ? '.selected' : ''}`, {
+    const row = el(`div.tree-row${selected.has(s.id) ? '.selected' : ''}`, {
       draggable: true,
       title: `${s.name}\n${PROTOCOLS[s.protocol].label} ${subtitle(s)}${s.notes ? `\n\n${s.notes}` : ''}`,
       dataset: { session: s.id },
       on: {
-        click: () => { selectedId = s.id; renderTree(); },
-        dblclick: () => App.emit('open-session', s),
-        contextmenu: (e) => { e.preventDefault(); selectedId = s.id; renderTree(); sessionMenu(e.clientX, e.clientY, s); },
-        dragstart: (e) => e.dataTransfer.setData('text/vytty-session', s.id),
+        click: (e) => selectRow(s.id, e),
+        dblclick: (e) => { if (!e.ctrlKey && !e.shiftKey) App.emit('open-session', s); },
+        contextmenu: (e) => {
+          e.preventDefault();
+          if (!selected.has(s.id)) selectRow(s.id);
+          if (selected.size > 1) multiMenu(e.clientX, e.clientY, selectedSessions());
+          else sessionMenu(e.clientX, e.clientY, s);
+        },
+        dragstart: (e) => {
+          const ids = selected.has(s.id) ? [...selected] : [s.id];
+          e.dataTransfer.setData('text/vytty-session', ids.join(','));
+        },
       },
     },
     el('span.color-dot', { style: { background: s.color || 'transparent' } }),
@@ -106,7 +139,7 @@
       node.classList.remove('drop-target');
       const sid = e.dataTransfer.getData('text/vytty-session');
       const fid = e.dataTransfer.getData('text/vytty-folder');
-      if (sid) { const s = App.session(sid); if (s) s.folderId = folderId; }
+      if (sid) for (const id of sid.split(',')) { const s = App.session(id); if (s) s.folderId = folderId; }
       if (fid && fid !== folderId) {
         // refuse to move a folder into its own descendant
         let p = App.folder(folderId);
@@ -131,6 +164,49 @@
       '-',
       { label: 'Delete', icon: 'trash', danger: true, action: () => deleteSession(s) },
     ]);
+  }
+
+  function multiMenu(x, y, list) {
+    const folders = App.tree.folders.slice().sort((a, b) => App.folderPath(a.id).localeCompare(App.folderPath(b.id)));
+    contextMenu(x, y, [
+      { header: `${list.length} sessions selected` },
+      { label: `Connect all (${list.length})`, icon: 'play', action: () => list.forEach((s) => App.emit('open-session', s)) },
+      '-',
+      { label: 'Move to', icon: 'folder', submenu: [
+        { label: '(root)', action: () => { for (const s of list) s.folderId = null; App.saveTree(); } },
+        ...folders.map((f) => ({ label: App.folderPath(f.id), action: () => { for (const s of list) s.folderId = f.id; App.saveTree(); } })),
+      ] },
+      { label: 'Set credential', icon: 'key', submenu: credentialSubmenu(list) },
+      '-',
+      { label: `Delete ${list.length} sessions`, icon: 'trash', danger: true, shortcut: 'Del', action: () => deleteSessions(list) },
+    ]);
+  }
+
+  function credentialSubmenu(list) {
+    const creds = App.tree.credentials || [];
+    return [
+      { label: 'Auto (match by username)', action: () => { for (const s of list) s.credentialId = null; App.saveTree(); } },
+      { label: 'None', action: () => { for (const s of list) s.credentialId = 'none'; App.saveTree(); } },
+      ...(creds.length ? ['-', ...creds.map((c) => ({ label: `${c.name} (${c.username})`, action: () => setCredential(list, c) }))] : []),
+    ];
+  }
+
+  // Assign a credential to several sessions and adopt its username, so a
+  // password already saved for that user is reused.
+  async function setCredential(list, cred) {
+    for (const s of list) { s.credentialId = cred.id; s.username = cred.username; }
+    await App.saveTree();
+    toast(`${list.length} session${list.length > 1 ? 's' : ''} → ${cred.name}`, 'ok');
+  }
+
+  async function deleteSessions(list) {
+    if (list.length === 1) return deleteSession(list[0]);
+    if (!(await confirmBox('Delete sessions', `Delete ${list.length} sessions and their stored passwords?`, { okLabel: `Delete ${list.length}`, danger: true }))) return;
+    const ids = new Set(list.map((s) => s.id));
+    App.tree.sessions = App.tree.sessions.filter((x) => !ids.has(x.id));
+    for (const id of ids) { selected.delete(id); try { await vytty.vault.remove(id); } catch { /* ignore */ } }
+    await App.saveTree();
+    toast(`Deleted ${list.length} sessions`, 'ok');
   }
 
   function folderMenu(x, y, f) {
@@ -174,7 +250,7 @@
     if (App.vault.unlocked) {
       try { const sec = await vytty.vault.get(s.id); if (Object.keys(sec).length) await vytty.vault.set(copy.id, sec); } catch { /* ignore */ }
     }
-    selectedId = copy.id;
+    selected.clear(); selected.add(copy.id); anchorId = copy.id;
     App.saveTree();
   }
 
@@ -407,7 +483,7 @@
       if (App.vault.unlocked) {
         try { await vytty.vault.set(out.id, { ...secret, password: pw.value, passphrase: passphrase.value }); } catch (e) { toast(`Vault: ${e.message}`, 'error'); }
       }
-      selectedId = out.id;
+      selected.clear(); selected.add(out.id); anchorId = out.id;
       await App.saveTree();
       if (connect) App.emit('open-session', out);
     };
@@ -508,13 +584,24 @@
       ]);
     });
     scroll.addEventListener('keydown', (e) => {
-      const s = selectedId && App.session(selectedId);
-      if (!s) return;
-      if (e.key === 'Enter') App.emit('open-session', s);
-      if (e.key === 'Delete') deleteSession(s);
-      if (e.key === 'F2') renameSession(s);
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !filter) {
+        e.preventDefault();
+        for (const id of visibleSessionIds()) selected.add(id);
+        paintSelection();
+        return;
+      }
+      const list = selectedSessions();
+      if (!list.length) return;
+      if (e.key === 'Delete') { e.preventDefault(); deleteSessions(list); }
+      else if (e.key === 'Enter') { e.preventDefault(); list.forEach((s) => App.emit('open-session', s)); }
+      else if (e.key === 'F2' && list.length === 1) { e.preventDefault(); renameSession(list[0]); }
+      else if (e.key === 'Escape') { selected.clear(); paintSelection(); }
     });
-    App.on('tree', renderTree);
+    App.on('tree', () => {
+      const alive = new Set(App.tree.sessions.map((s) => s.id));
+      for (const id of [...selected]) if (!alive.has(id)) selected.delete(id);
+      renderTree();
+    });
     App.on('new-session', () => editSession());
     App.on('edit-session', (s) => editSession(s));
     App.on('focus-session-search', () => { App.emit('show-panel', 'sessions'); search.focus(); search.select(); });

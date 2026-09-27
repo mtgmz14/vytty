@@ -147,9 +147,20 @@ function parseSession(name, value, folderId) {
     _srcType: label,
   };
 
-  const host = unescape(params[1] || '').trim();
+  let host = unescape(params[1] || '').trim();
   const user = (params[3] || '').trim();
-  const username = user && user !== '<default>' ? unescape(user) : '';
+  let username = user && user !== '<default>' ? unescape(user) : '';
+  // MobaXterm sometimes leaves the username field empty and keeps the login in
+  // the host ("user@host") or the session name ("user@host"). Read it from
+  // there so the imported session carries a username.
+  if (!username) {
+    const m = /^([^@\s/]+)@(.+)$/.exec(host);
+    if (m) { username = m[1]; host = m[2].trim(); }
+  }
+  if (!username) {
+    const m = /^([^@\s/]+)@[^\s]+$/.exec(base.name);
+    if (m) username = m[1];
+  }
 
   if (proto === 'ssh') {
     if (!host) { bumpSkip(label); return null; }

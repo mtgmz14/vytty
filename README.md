@@ -30,11 +30,12 @@ portable executable: no installer, no registry, no AppData. Sessions, settings, 
 
 **Sessions**
 - Session tree with folders and subfolders, drag & drop, search (name, host, user, folder, notes)
+- Multi-select in the tree (Ctrl / Shift click, Ctrl+A) to move, delete or set a credential on many sessions at once (Delete key)
 - Per-session name, color, highlight profile, logging on/off, startup commands and notes
 - Quick connect bar: `user@host:22`, `ssh -p 2222 host`, `telnet 10.0.0.1 23`, `COM3 9600`, `powershell`
 - Duplicate, open all sessions in a folder, save a quick-connect tab as a session
 - Import / export (passwords optionally included, encrypted with an export password)
-- **Import from MobaXterm** (`.mxtsessions` / `MobaXterm.ini`): folders (nested), hosts, ports, users, key paths, SSH gateways and serial settings for hundreds of sessions at once; SSH/Telnet/Serial/Shell/SFTP mapped, other types skipped and reported
+- **Import from MobaXterm** (`.mxtsessions` / `MobaXterm.ini`): folders (nested), hosts, ports, users, key paths, SSH gateways and serial settings for hundreds of sessions at once; SSH/Telnet/Serial/Shell/SFTP mapped, other types skipped and reported — reads the username from the session field, the host (`user@host`) or the session name, so it lines up with your credentials
 
 **Password vault**
 - Every saved session can have its own password / key passphrase
