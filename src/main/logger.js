@@ -21,13 +21,32 @@ function todayFile() {
   return path.join(logDir(), `${dayStamp()}.log`);
 }
 
-function appendRaw(text) {
+// Writes are batched: syncing to disk on every line blocked the main process
+// (which also relays keystrokes) and made busy terminals feel laggy.
+let queue = '';
+let flushTimer = null;
+let madeDir = '';
+
+function flush() {
+  clearTimeout(flushTimer);
+  flushTimer = null;
+  if (!queue) return;
+  const text = queue;
+  queue = '';
   try {
-    fs.mkdirSync(logDir(), { recursive: true });
+    const dir = logDir();
+    if (madeDir !== dir) { fs.mkdirSync(dir, { recursive: true }); madeDir = dir; }
     fs.appendFileSync(todayFile(), text, 'utf8');
   } catch (err) {
+    madeDir = '';
     console.error('[vytty] log write failed:', err.message);
   }
+}
+
+function appendRaw(text) {
+  queue += text;
+  if (queue.length > 256 * 1024) flush();
+  else if (!flushTimer) flushTimer = setTimeout(flush, 500);
 }
 
 class SessionLog {
@@ -105,13 +124,15 @@ class SessionLog {
     if (!this.enabled) return;
     if (this.line.length) this.emitLine();
     appendRaw(`===== [${dayStamp()} ${timeStamp()}] CLOSE "${this.name}"${reason ? ` (${reason})` : ''} =====\n`);
+    flush();
     this.enabled = false;
   }
 }
 
 module.exports = {
   SessionLog,
-  configure(s) { settings = { ...settings, ...(s || {}) }; },
+  configure(s) { flush(); settings = { ...settings, ...(s || {}) }; },
+  flush,
   logDir,
   todayFile,
 };

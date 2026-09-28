@@ -226,10 +226,11 @@ handle('dialog:openDir', async () => {
 });
 
 handle('logs:open', () => {
+  logger.flush();
   fs.mkdirSync(logger.logDir(), { recursive: true });
   return shell.openPath(logger.logDir());
 });
-handle('logs:today', () => logger.todayFile());
+handle('logs:today', () => { logger.flush(); return logger.todayFile(); });
 handle('shell:openPath', (p) => shell.openPath(p));
 handle('shell:openExternal', (url) => {
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);

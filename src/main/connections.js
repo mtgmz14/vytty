@@ -371,7 +371,9 @@ class ConnectionManager {
         },
       };
       if (session.legacyAlgorithms ?? settings.ssh.legacyAlgorithms) cfg.algorithms = LEGACY_ALGOS;
-      try { client.connect(cfg); arm(); } catch (e) { reject(e); }
+      // ssh2 leaves Nagle's algorithm on: each keystroke then waits for the ACK
+      // of the previous one (network gear delays ACKs ~200ms), so typing lags.
+      try { client.connect(cfg); client.setNoDelay(true); arm(); } catch (e) { reject(e); }
     });
   }
 

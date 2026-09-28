@@ -36,7 +36,7 @@
   const ciscoErrors = rule('CLI error', /^\s*%\s?(?:Invalid input|Incomplete command|Ambiguous command|Unknown command|Unrecognized command|Bad (?:mask|IP address)|Cannot|Error|Unable|Permission denied|Authorization failed)[^\r\n]*/gim, 'bold red');
   const caret = rule('Error caret', /^\s+\^\s*$/gm, 'bold red');
   const more = rule('More prompt', /\s?--More--\s?|<--- More --->|-- ?More ?--/g, 'inverse');
-  const description = rule('Description', /(?<=(?:^|[#>])\s*(?:description|alias|remark)\s).*$/gm, 'italic gray');
+  const description = rule('Description', /(?<=(?:^|[#>])\s*(?:description|alias|remark)\s).*$/gm, 'italic brightYellow');
   const comment = rule('Config comment', /^!.*$/gm, 'gray');
   const zeroCounters = rule('Zero counters', /\b0 (?:input |output )?(?:errors|CRC|frame|overrun|ignored|collisions|runts|giants|throttles|underruns|drops|interface resets|late collision|deferred|lost carrier|no carrier|output buffer failures|babbles|watchdog)\b/gi, 'gray');
   const prompt = rule('Prompt', /^[A-Za-z0-9][\w.\-]*(?:\([\w\-\/.:]+\))?[#>](?=\s|$)/gm, 'bold');
