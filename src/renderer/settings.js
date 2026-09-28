@@ -236,6 +236,9 @@
         el('span.k', { text: 'Serial support' }), el('span.v', { text: App.info.capabilities.serial ? 'yes' : 'no' }),
         el('span.k', { text: 'Local shells' }), el('span.v', { text: App.info.capabilities.local ? 'yes' : 'no' }),
         el('span.k', { text: 'License' }), el('span.v', { text: 'MIT' })),
+      el('h4', { text: 'Updates' }),
+      check('updates.autoCheck', 'Check for new versions automatically', '(at startup and every 6 hours)'),
+      el('button.btn.small', { type: 'button', on: { click: () => App.checkUpdates(true) } }, icon('download', 12), 'Check for updates now'),
       el('p.muted', { style: { marginTop: '16px' }, text: 'Vytty is portable: copy the executable together with the VyttyData folder to take all sessions, settings, the vault and logs with you.' }),
       el('button.btn.small', { type: 'button', on: { click: () => vytty.win.devtools() } }, 'Developer tools'),
     ];

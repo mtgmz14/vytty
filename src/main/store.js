@@ -51,6 +51,10 @@ const DEFAULT_SETTINGS = {
   telnet: {
     autoLogin: true,
   },
+  updates: {
+    autoCheck: true,
+    skipVersion: '',
+  },
   reconnectKey: true,
   confirmCloseConnected: true,
   sidebarWidth: 260,

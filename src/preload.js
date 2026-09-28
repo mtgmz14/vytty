@@ -72,6 +72,13 @@ contextBridge.exposeInMainWorld('vytty', {
     open: () => call('logs:open'),
     today: () => call('logs:today'),
   },
+  update: {
+    check: () => call('update:check'),
+    download: () => call('update:download'),
+    cancel: () => call('update:cancel'),
+    install: () => call('update:install'),
+    onProgress: (fn) => on('update:progress', fn),
+  },
   openPath: (p) => call('shell:openPath', p),
   openExternal: (u) => call('shell:openExternal', u),
   pathForFile: (file) => webUtils.getPathForFile(file),

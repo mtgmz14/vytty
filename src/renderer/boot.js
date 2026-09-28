@@ -254,6 +254,7 @@
 
     await refreshVault();
     await vaultUnlock();
+    App.emit('booted');
   }
 
   window.addEventListener('DOMContentLoaded', () => {

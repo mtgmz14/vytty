@@ -15,6 +15,7 @@ const logger = require('./logger');
 const { ConnectionManager, capabilities } = require('./connections');
 const mobaxterm = require('./mobaxterm');
 const dragout = require('./dragout');
+const updater = require('./updater');
 
 let win = null;
 let settings = store.getSettings();
@@ -273,6 +274,12 @@ handle('sessions:importMobaXterm', async () => {
   const parsed = mobaxterm.parseFile(fs.readFileSync(res.filePaths[0]));
   return { file: res.filePaths[0], ...parsed };
 });
+
+// Updates from GitHub releases
+handle('update:check', () => updater.check());
+handle('update:download', () => updater.download((got, total) => send('update:progress', got, total)));
+handle('update:cancel', () => updater.cancel());
+handle('update:install', () => updater.install());
 
 // Custom title bar controls
 ipcMain.on('win:minimize', () => win && win.minimize());
