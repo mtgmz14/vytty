@@ -161,6 +161,9 @@ function parseSession(name, value, folderId) {
     const m = /^([^@\s/]+)@[^\s]+$/.exec(base.name);
     if (m) username = m[1];
   }
+  // Session names often wrap the login in brackets ("[root]@host"); the
+  // brackets are only decoration, not part of the actual username.
+  username = username.trim().replace(/^\[\s*(.*?)\s*\]$/, '$1');
 
   if (proto === 'ssh') {
     if (!host) { bumpSkip(label); return null; }
