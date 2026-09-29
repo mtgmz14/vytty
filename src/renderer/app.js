@@ -183,7 +183,7 @@
       const logOn = App.settings.logging.enabled && t.logEnabled;
       parts.push(item([el(`span.badge.${logOn ? 'ok' : 'off'}`, { text: logOn ? 'LOG' : 'NO LOG' })], {
         click: () => vytty.logs.open(),
-        title: logOn ? `Logging to ${App.info.todayLog}\nClick to open the log folder` : 'Logging disabled',
+        title: logOn ? `Logging to ${App.info.logDir} (one file per device and day: hostname#YYYY-MM-DD.log)\nClick to open the log folder` : 'Logging disabled',
       }));
       if (t.term) parts.push(item(`${t.term.cols}×${t.term.rows}`));
     }

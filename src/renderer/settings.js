@@ -170,7 +170,7 @@
       const dir = text('logging.dir', { placeholder: App.info.logDir });
       return [
         el('h3', { text: 'Session logging' }),
-        el('div.notice.info', { text: 'Every session is written to one file per day (YYYY-MM-DD.log). All sessions of that day append to the same file, with open/close markers. Escape codes are stripped.' }),
+        el('div.notice.info', { text: 'Every device gets one file per day: hostname#YYYY-MM-DD.log. The hostname is read from the device prompt (e.g. SW1#, user@host:~$), so all sessions to the same device that day append to the same file, with open/close markers. If no prompt is recognised the session\'s host address is used. Escape codes are stripped.' }),
         check('logging.enabled', 'Log session output'),
         field('Log folder', el('div.with-btn', dir, el('button.btn', { type: 'button', on: { click: async () => { const p = await vytty.dialog.openDir(); if (p) { dir.value = p; set('logging.dir', p); } } } }, 'Browse'),
           el('button.btn', { type: 'button', on: { click: () => vytty.logs.open() } }, 'Open')), 'Leave empty for the portable data folder'),
@@ -232,13 +232,16 @@
       el('div.kv',
         el('span.k', { text: 'Version' }), el('span.v', { text: App.info.version }),
         el('span.k', { text: 'Data folder' }), el('span.v', el('a', { href: '#', text: App.info.dataDir, on: { click: (e) => { e.preventDefault(); vytty.openPath(App.info.dataDir); } } })),
-        el('span.k', { text: 'Today\'s log' }), el('span.v', { text: App.info.todayLog }),
+        el('span.k', { text: 'Log folder' }), el('span.v', { text: App.info.logDir }),
         el('span.k', { text: 'Serial support' }), el('span.v', { text: App.info.capabilities.serial ? 'yes' : 'no' }),
         el('span.k', { text: 'Local shells' }), el('span.v', { text: App.info.capabilities.local ? 'yes' : 'no' }),
         el('span.k', { text: 'License' }), el('span.v', { text: 'MIT' })),
       el('h4', { text: 'Updates' }),
       check('updates.autoCheck', 'Check for new versions automatically', '(at startup and every 6 hours)'),
       el('button.btn.small', { type: 'button', on: { click: () => App.checkUpdates(true) } }, icon('download', 12), 'Check for updates now'),
+      App.info.install && App.info.install.mode === 'portable'
+        ? el('button.btn.small', { type: 'button', style: { marginLeft: '8px' }, on: { click: () => App.offerFolderVersion(true) } }, 'Switch to the faster folder version…')
+        : null,
       el('p.muted', { style: { marginTop: '16px' }, text: 'Vytty is portable: copy the executable together with the VyttyData folder to take all sessions, settings, the vault and logs with you.' }),
       el('button.btn.small', { type: 'button', on: { click: () => vytty.win.devtools() } }, 'Developer tools'),
     ];

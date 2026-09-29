@@ -56,8 +56,11 @@ portable executable: no installer, no registry, no AppData. Sessions, settings, 
 - Custom regex rules with a live preview
 
 **Logging**
-- One log file per day: `VyttyData/logs/YYYY-MM-DD.log`
-- Every session of that day **appends** to the same file, with OPEN/CLOSE markers
+- One log file per device and day: `VyttyData/logs/<hostname>#YYYY-MM-DD.log`
+- The hostname is read from the device prompt (`SW1#`, `SW1(config)#`, `user@host:~$`), so every session to the
+  same device that day **appends** to the same file, with OPEN/CLOSE markers - whether you connected by IP or name.
+  Hopping from a jump host to another device switches to that device's file. Without a recognisable prompt the
+  session's host address is used
 - Optional `[HH:MM:SS]` and `[session name]` prefix on every line; escape codes and backspaces are cleaned up
 - Log folder is configurable
 
@@ -89,8 +92,15 @@ Catppuccin Mocha, Gruvbox Dark, Solarized Dark, Solarized Light, Monokai, One Da
 
 ## Download
 
-Grab `Vytty-x.y.z-portable.exe` from the [Releases](https://github.com/mtgmz14/vytty/releases) page and run it.
-The first start creates `VyttyData` next to the executable and asks you to set up the vault.
+Grab `Vytty-x.y.z-win-x64.zip` from the [Releases](https://github.com/mtgmz14/vytty/releases) page, unzip it
+anywhere (e.g. `C:\Tools\Vytty`) and run `Vytty.exe`. The first start creates `VyttyData` next to it and asks you to
+set up the vault. Linux: `Vytty-x.y.z.AppImage`.
+
+`Vytty-x.y.z-portable.exe` is a single file too, but it unpacks the whole app (~275 MB) on every start, so it opens
+in 10+ seconds instead of ~2. When started, it offers to switch itself to the folder version (data included).
+
+Vytty checks for new releases at startup and every 6 hours, asks before updating, then downloads the update and
+restarts. It can be turned off in **Settings → About**.
 
 ## Migrating from MobaXterm
 
@@ -123,13 +133,14 @@ In MobaXterm, right-click **User sessions → Export all sessions to file** (or 
 ## Data folder
 
 ```
-Vytty-0.1.0-portable.exe
-VyttyData/
-  settings.json      UI and terminal settings, snippets
-  sessions.json      folders and sessions (no passwords)
-  vault.json         encrypted credentials
-  known_hosts.json   trusted SSH host key fingerprints
-  logs/2026-09-26.log
+Vytty/
+  Vytty.exe
+  VyttyData/
+    settings.json      UI and terminal settings, snippets
+    sessions.json      folders and sessions (no passwords)
+    vault.json         encrypted credentials
+    known_hosts.json   trusted SSH host key fingerprints
+    logs/SW-CORE-01#2026-09-26.log
 ```
 
 ## Building from source
@@ -141,7 +152,7 @@ git clone https://github.com/mtgmz14/vytty.git
 cd vytty
 npm install
 npm start            # run from source (data goes to ./data)
-npm run dist:win     # build dist/Vytty-<version>-portable.exe
+npm run dist:win     # build dist/Vytty-<version>-win-x64.zip and -portable.exe
 npm run dist:linux   # build an AppImage
 ```
 
@@ -163,8 +174,9 @@ sandboxed with context isolation; all network and file access goes through a sma
 
 Vytty to przenośny (portable) terminal SSH / Telnet / Serial dla sieciowców i adminów Linuksa: drzewo sesji z
 folderami, zaszyfrowany sejf haseł dla każdej sesji, podświetlanie składni Cisco Catalyst / Nexus / Linux, dzienne
-pliki logów (wszystkie sesje z danego dnia dopisują się do jednego pliku), kopiowanie po zaznaczeniu i wklejanie
-prawym przyciskiem, multi-exec, panel SFTP, snippety i 12 motywów. Wszystkie dane są w folderze `VyttyData` obok pliku `.exe`.
+pliki logów per urządzenie (`hostname#RRRR-MM-DD.log` - wszystkie sesje na to samo urządzenie danego dnia dopisują
+się do jednego pliku), kopiowanie po zaznaczeniu i wklejanie prawym przyciskiem, multi-exec, panel SFTP, snippety,
+12 motywów i automatyczne aktualizacje. Wszystkie dane są w folderze `VyttyData` obok pliku `Vytty.exe`.
 
 ## License
 

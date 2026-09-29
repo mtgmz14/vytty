@@ -8,7 +8,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { StringDecoder } = require('string_decoder');
 const { Client, utils: sshUtils } = require('ssh2');
-const { SessionLog } = require('./logger');
+const { SessionLog, fallbackHost } = require('./logger');
 
 let SerialPort = null;
 let pty = null;
@@ -80,7 +80,7 @@ class ConnectionManager {
       cols: cols || 80,
       rows: rows || 24,
       decoder: new StringDecoder('utf8'),
-      log: new SessionLog(logName || session.name || session.host || 'session', describe(session), logEnabled !== false),
+      log: new SessionLog(logName || session.name || session.host || 'session', describe(session), logEnabled !== false, fallbackHost(session)),
       closed: false,
       write: () => {},
       resize: () => {},

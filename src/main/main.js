@@ -115,9 +115,9 @@ handle('app:info', () => ({
   version: app.getVersion(),
   dataDir: paths.dataDir,
   logDir: logger.logDir(),
-  todayLog: logger.todayFile(),
   platform: process.platform,
   capabilities,
+  install: updater.info(),
   systemDark: nativeTheme.shouldUseDarkColors,
 }));
 
@@ -231,7 +231,7 @@ handle('logs:open', () => {
   fs.mkdirSync(logger.logDir(), { recursive: true });
   return shell.openPath(logger.logDir());
 });
-handle('logs:today', () => { logger.flush(); return logger.todayFile(); });
+handle('logs:today', () => { logger.flush(); return logger.logDir(); });
 handle('shell:openPath', (p) => shell.openPath(p));
 handle('shell:openExternal', (url) => {
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
@@ -277,9 +277,10 @@ handle('sessions:importMobaXterm', async () => {
 
 // Updates from GitHub releases
 handle('update:check', () => updater.check());
-handle('update:download', () => updater.download((got, total) => send('update:progress', got, total)));
+handle('update:download', () => updater.download((got, total, phase) => send('update:progress', got, total, phase)));
 handle('update:cancel', () => updater.cancel());
-handle('update:install', () => updater.install());
+handle('update:install', (opts) => updater.install(opts));
+handle('update:convert', (opts) => updater.convertToFolder(opts));
 
 // Custom title bar controls
 ipcMain.on('win:minimize', () => win && win.minimize());

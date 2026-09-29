@@ -1,9 +1,15 @@
 'use strict';
-// Daily session logs: every session writes into <logDir>/YYYY-MM-DD.log and
-// every session that day appends to the same file. Output is turned into
-// plain text with a tiny line emulator (handles \r, \b, erase-line and cursor
-// left/right) so "--More--" prompts and progress bars do not leave garbage.
+// Session logs, one file per device and day: <logDir>/<hostname>#YYYY-MM-DD.log.
+// Every session to the same device that day appends to the same file.
+// The hostname is read from the device prompt ("SW1#", "SW1(config)#",
+// "user@host:~$", "[user@host ~]$"), so a device reached by IP or by name
+// ends up in one file; output before the first prompt (banner, login) is held
+// until it is known. Without a recognisable prompt the session's host is used.
+// Output is turned into plain text with a tiny line emulator (handles \r, \b,
+// erase-line and cursor left/right) so "--More--" prompts and progress bars do
+// not leave garbage.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { paths } = require('./paths');
 
@@ -17,47 +23,101 @@ function logDir() {
   return settings.dir && settings.dir.trim() ? settings.dir.trim() : paths.defaultLogs;
 }
 
-function todayFile() {
-  return path.join(logDir(), `${dayStamp()}.log`);
+const safeName = (s) => String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '').slice(0, 100) || 'unknown';
+const fileFor = (host) => path.join(logDir(), `${safeName(host)}#${dayStamp()}.log`);
+
+// Prompt patterns. The first capture group is the hostname.
+const PROMPTS = [
+  // Linux / Juniper / MikroTik: user@host:~$, [user@host dir]$, user@host>, [admin@host] >
+  /^\[?[\w.-]+@([A-Za-z0-9][\w.-]*)(?::\S*?|\s[^\]\s]*)?\]?\s?[$#>%](?:\s|$)/,
+  /^([A-Za-z0-9][\w.-]{0,62})(?:\([\w./:-]*\))?[#>]/, // Cisco IOS / NX-OS / ASA: host#, host(config-if)#, host>
+];
+const PROMPT_END = /[#>$%\]]\s?$/;
+
+function hostFromPrompt(text, partial) {
+  if (partial && !PROMPT_END.test(text)) return null;
+  for (const re of PROMPTS) {
+    const m = re.exec(text);
+    if (m && !/^\d+$/.test(m[1]) && m[1].length > 1) return m[1];
+  }
+  return null;
 }
 
-// Writes are batched: syncing to disk on every line blocked the main process
-// (which also relays keystrokes) and made busy terminals feel laggy.
-let queue = '';
+// Writes are batched per file: syncing to disk on every line blocked the main
+// process (which also relays keystrokes) and made busy terminals feel laggy.
+const queue = new Map(); // file -> text
+let queued = 0;
 let flushTimer = null;
-let madeDir = '';
+const madeDirs = new Set();
 
 function flush() {
   clearTimeout(flushTimer);
   flushTimer = null;
-  if (!queue) return;
-  const text = queue;
-  queue = '';
-  try {
-    const dir = logDir();
-    if (madeDir !== dir) { fs.mkdirSync(dir, { recursive: true }); madeDir = dir; }
-    fs.appendFileSync(todayFile(), text, 'utf8');
-  } catch (err) {
-    madeDir = '';
-    console.error('[vytty] log write failed:', err.message);
+  for (const [file, text] of queue) {
+    try {
+      const dir = path.dirname(file);
+      if (!madeDirs.has(dir)) { fs.mkdirSync(dir, { recursive: true }); madeDirs.add(dir); }
+      fs.appendFileSync(file, text, 'utf8');
+    } catch (err) {
+      madeDirs.clear();
+      console.error('[vytty] log write failed:', err.message);
+    }
   }
+  queue.clear();
+  queued = 0;
 }
 
-function appendRaw(text) {
-  queue += text;
-  if (queue.length > 256 * 1024) flush();
+function appendTo(file, text) {
+  queue.set(file, (queue.get(file) || '') + text);
+  queued += text.length;
+  if (queued > 256 * 1024) flush();
   else if (!flushTimer) flushTimer = setTimeout(flush, 500);
 }
 
+const HOLD_MS = 30000;
+const HOLD_BYTES = 512 * 1024;
+
 class SessionLog {
-  constructor(name, descriptor, enabled) {
+  // fallbackHost: used when no prompt is recognised (session host, serial port...).
+  constructor(name, descriptor, enabled, fallbackHost) {
     this.name = name;
     this.enabled = enabled;
+    this.fallback = fallbackHost || name;
+    this.host = null;
+    this.held = [];
+    this.heldBytes = 0;
     this.line = [];
     this.cursor = 0;
     this.esc = '';
     if (this.enabled) {
-      appendRaw(`\n===== [${dayStamp()} ${timeStamp()}] OPEN  "${name}" (${descriptor}) =====\n`);
+      this.out(`\n===== [${dayStamp()} ${timeStamp()}] OPEN  "${name}" (${descriptor}) =====\n`);
+      this.holdTimer = setTimeout(() => { if (!this.host) this.setHost(this.fallback); }, HOLD_MS);
+      if (this.holdTimer.unref) this.holdTimer.unref();
+    }
+  }
+
+  out(text) {
+    if (this.host) { appendTo(fileFor(this.host), text); return; }
+    this.held.push(text);
+    this.heldBytes += text.length;
+    if (this.heldBytes > HOLD_BYTES) this.setHost(this.fallback);
+  }
+
+  // Start writing to the file of `host`. A later prompt with another hostname
+  // (e.g. ssh/telnet from a jump box to the next device) moves to that file.
+  setHost(host) {
+    if (!host || host === this.host) return;
+    const stamp = `[${dayStamp()} ${timeStamp()}]`;
+    if (this.host) {
+      appendTo(fileFor(this.host), `----- ${stamp} "${this.name}" continues on ${host} -----\n`);
+      appendTo(fileFor(host), `\n----- ${stamp} "${this.name}" continued from ${this.host} -----\n`);
+    }
+    this.host = host;
+    clearTimeout(this.holdTimer);
+    if (this.held.length) {
+      appendTo(fileFor(host), this.held.join(''));
+      this.held = [];
+      this.heldBytes = 0;
     }
   }
 
@@ -72,7 +132,9 @@ class SessionLog {
     const text = this.line.join('').replace(/\s+$/, '');
     this.line = [];
     this.cursor = 0;
-    appendRaw(this.prefix() + text + '\n');
+    const host = hostFromPrompt(text, false);
+    if (host) this.setHost(host);
+    this.out(this.prefix() + text + '\n');
   }
 
   putChar(ch) {
@@ -118,15 +180,28 @@ class SessionLog {
       if (ch < ' ' || ch === '\x7f') continue;
       this.putChar(ch);
     }
+    // A prompt waiting for input is the last, unterminated line.
+    if (!this.host && this.line.length && this.line.length < 200) {
+      const host = hostFromPrompt(this.line.join('').replace(/\s+$/, ' '), true);
+      if (host) this.setHost(host);
+    }
   }
 
   close(reason) {
     if (!this.enabled) return;
     if (this.line.length) this.emitLine();
-    appendRaw(`===== [${dayStamp()} ${timeStamp()}] CLOSE "${this.name}"${reason ? ` (${reason})` : ''} =====\n`);
+    if (!this.host) this.setHost(this.fallback);
+    this.out(`===== [${dayStamp()} ${timeStamp()}] CLOSE "${this.name}"${reason ? ` (${reason})` : ''} =====\n`);
     flush();
     this.enabled = false;
   }
+}
+
+// Default file name for a session that has not shown a prompt yet.
+function fallbackHost(session) {
+  if (session.protocol === 'local') return os.hostname();
+  if (session.protocol === 'serial') return path.basename(session.serialPath || 'serial');
+  return session.host || session.name || 'session';
 }
 
 module.exports = {
@@ -134,5 +209,5 @@ module.exports = {
   configure(s) { flush(); settings = { ...settings, ...(s || {}) }; },
   flush,
   logDir,
-  todayFile,
+  fallbackHost,
 };

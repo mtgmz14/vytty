@@ -16,7 +16,9 @@ jobs:
         include:
           - os: windows-latest
             script: dist:win
-            files: dist/*.exe
+            files: |
+              dist/*.zip
+              dist/*.exe
           - os: ubuntu-latest
             script: dist:linux
             files: dist/*.AppImage
