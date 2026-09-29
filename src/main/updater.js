@@ -234,8 +234,10 @@ function cleanup() {
     if (mode === 'portable' || mode === 'appimage') {
       const file = mode === 'portable' ? process.env.PORTABLE_EXECUTABLE_FILE : process.env.APPIMAGE;
       const dir = path.dirname(file);
+      // Only files set aside by an update. Not "*.download": a download may be
+      // running right now (the update prompt can come up before this runs).
       for (const name of fs.readdirSync(dir)) {
-        if (name.endsWith(OLD) || /^Vytty-.*\.download$/i.test(name)) fs.rmSync(path.join(dir, name), { force: true });
+        if (name.endsWith(OLD)) fs.rmSync(path.join(dir, name), { force: true });
       }
     } else if (mode === 'folder') {
       const appDir = path.dirname(process.execPath);
