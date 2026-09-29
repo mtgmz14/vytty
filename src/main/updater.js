@@ -208,6 +208,22 @@ function runScript(lines) {
 const q = (p) => p.replace(/%/g, '%%');
 // "timeout" needs a console stdin, which a hidden detached script lacks.
 const SLEEP = 'ping -n 2 127.0.0.1 >nul';
+// Jump to `label` once this process has exited. No pipe ("tasklist | find"):
+// without a console the reading side never sees end of input and hangs.
+const WAIT_EXIT = (label) => {
+  const tmp = q(path.join(os.tmpdir(), `vytty-wait-${process.pid}.txt`));
+  return [
+    'set /a tries=0',
+    ':wait',
+    SLEEP,
+    `tasklist /fi "PID eq ${process.pid}" /nh > "${tmp}" 2>nul`,
+    `findstr /c:" ${process.pid} " "${tmp}" >nul || goto ${label}`,
+    'set /a tries+=1',
+    `if %tries% lss 60 goto wait`,
+    `:${label}`,
+    `del /f /q "${tmp}" >nul 2>&1`,
+  ];
+};
 
 // Arrange the swap; the caller then quits the app.
 function install({ shortcut } = {}) {
@@ -227,13 +243,7 @@ function install({ shortcut } = {}) {
     // ones (robocopy retries files still held by exiting child processes).
     const appDir = path.dirname(process.execPath);
     runScript([
-      'set /a tries=0',
-      ':wait',
-      SLEEP,
-      `tasklist /fi "PID eq ${process.pid}" | find "${process.pid}" >nul || goto swap`,
-      'set /a tries+=1',
-      'if %tries% lss 60 goto wait',
-      ':swap',
+      ...WAIT_EXIT('swap'),
       SLEEP,
       `robocopy "${q(p.root)}" "${q(appDir)}" /E /R:30 /W:1 /NFL /NDL /NJH /NJS /NP >nul`,
       `start "" "${q(path.join(appDir, 'Vytty.exe'))}"`,
@@ -251,13 +261,7 @@ function install({ shortcut } = {}) {
   const oldData = path.join(path.dirname(exe), 'VyttyData');
   const newData = path.join(p.target, 'VyttyData');
   runScript([
-    'set /a tries=0',
-    ':wait',
-    SLEEP,
-    `tasklist /fi "PID eq ${process.pid}" | find "${process.pid}" >nul || goto data`,
-    'set /a tries+=1',
-    'if %tries% lss 60 goto wait',
-    ':data',
+    ...WAIT_EXIT('data'),
     'set /a tries=0',
     ':movedata',
     `if not exist "${q(oldData)}" goto delexe`,
