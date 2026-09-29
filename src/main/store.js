@@ -54,7 +54,6 @@ const DEFAULT_SETTINGS = {
   updates: {
     autoCheck: true,
     skipVersion: '',
-    folderPromptDismissed: false,
   },
   reconnectKey: true,
   confirmCloseConnected: true,

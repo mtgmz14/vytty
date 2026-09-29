@@ -1,24 +1,26 @@
 'use strict';
-// Self-update from GitHub releases, plus the one-time switch from the
-// single-file portable .exe to the folder version on Windows.
-//
-// Why the folder version: the portable .exe unpacks the whole app (~275 MB) to
-// %TEMP% on every start and deletes it on exit, so every launch takes 10+ s.
-// The folder version (Vytty-x.y.z-win-x64.zip) starts in ~2 s.
+// Self-update from GitHub releases.
 //
 // Install modes:
-//   folder   - Windows, unpacked folder with Vytty.exe (+ VyttyData inside it)
-//   portable - Windows, single-file portable .exe (updates convert it to a folder)
+//   portable - Windows, Vytty-x.y.z-portable.exe (our launcher, build/portable.nsi,
+//              which starts a cached copy of the app and exits)
+//   folder   - Windows, unpacked Vytty-x.y.z-win-x64.zip
 //   appimage - Linux AppImage
-// The VyttyData folder is never modified, only moved (portable -> folder).
+//
+// No helper scripts: Windows lets a file that is in use be renamed, so the
+// running files are renamed to "*.vytty-old", the new ones put in their place,
+// and Vytty restarts through app.relaunch (which waits for this process to
+// exit). The leftovers are removed on the next start. VyttyData is never touched.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { app, net, shell } = require('electron');
+const { app, net } = require('electron');
 
 const REPO = 'mtgmz14/vytty';
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
+const OLD = '.vytty-old';
+const CLEANUP_MARK = '.vytty-cleanup';
 
 // Numeric compare of "1.2.3" style versions (a leading "v" is ignored).
 function newer(a, b) {
@@ -37,27 +39,11 @@ function installMode() {
   return null;
 }
 
-const portableDir = () => process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || '');
-
-// Where the folder version goes when converting from the portable .exe: the
-// .exe's own folder, so VyttyData stays where it is. Only when the .exe sits
-// loose in a shared place (Desktop, Downloads, a drive root...) does it get a
-// "Vytty" subfolder instead of spilling ~100 files there.
-function folderTarget() {
-  const exeDir = portableDir();
-  const shared = [os.homedir(), ...['desktop', 'downloads', 'documents'].map((n) => { try { return app.getPath(n); } catch { return ''; } })]
-    .filter(Boolean).map((p) => path.resolve(p).toLowerCase());
-  const dir = path.resolve(exeDir);
-  const isShared = shared.includes(dir.toLowerCase()) || dir.toLowerCase() === path.parse(dir).root.toLowerCase();
-  return isShared ? path.join(exeDir, 'Vytty') : exeDir;
-}
-
 function info() {
-  const mode = installMode();
-  return { mode, folderTarget: mode === 'portable' ? folderTarget() : null };
+  return { mode: installMode() };
 }
 
-const assetPattern = (mode) => (mode === 'appimage' ? /\.AppImage$/i : mode ? /-win-x64\.zip$/i : null);
+const ASSETS = { portable: /-portable\.exe$/i, folder: /-win-x64\.zip$/i, appimage: /\.AppImage$/i };
 
 let latest = null;
 let prepared = null;
@@ -71,7 +57,7 @@ async function check() {
   const rel = await res.json();
   const version = String(rel.tag_name || '').replace(/^v/i, '');
   const mode = installMode();
-  const re = assetPattern(mode);
+  const re = ASSETS[mode];
   const asset = re && (rel.assets || []).find((a) => re.test(a.name));
   latest = {
     available: newer(version, app.getVersion()),
@@ -86,19 +72,12 @@ async function check() {
   return latest;
 }
 
-// Run a process, resolve with its exit code.
 function run(cmd, args) {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { windowsHide: true, stdio: 'ignore' });
     p.on('error', reject);
     p.on('close', resolve);
   });
-}
-
-// robocopy exit codes below 8 mean success.
-async function copyTree(src, dst, extra = []) {
-  const code = await run('robocopy.exe', [src, dst, '/E', '/R:2', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', ...extra]);
-  if (code >= 8) throw new Error(`Copying files failed (robocopy ${code})`);
 }
 
 // The folder that holds Vytty.exe inside an extracted zip.
@@ -110,26 +89,20 @@ function findAppRoot(dir) {
   throw new Error('Vytty.exe not found in the downloaded archive');
 }
 
-// Portable -> folder: fill the target folder while this instance still runs.
-// Vytty.exe is staged as Vytty.exe.new: the running portable .exe may itself
-// be called Vytty.exe, and it stays locked until Vytty has exited.
-async function fillFolder(sourceRoot) {
-  const target = folderTarget();
-  if (target !== portableDir() && fs.existsSync(target) && fs.readdirSync(target).length && !fs.existsSync(path.join(target, 'Vytty.exe'))) {
-    throw new Error(`${target} already exists and is not a Vytty folder`);
-  }
-  fs.mkdirSync(target, { recursive: true });
-  await copyTree(sourceRoot, target, ['/XF', 'Vytty.exe']);
-  fs.copyFileSync(path.join(sourceRoot, 'Vytty.exe'), path.join(target, 'Vytty.exe.new'));
-  return target;
+// Versioned file names follow the release; a renamed file (e.g. "Vytty.exe"
+// used by shortcuts) is replaced in place.
+function destinationFor(target, assetName) {
+  const versioned = /^Vytty-\d+\.\d+\.\d+(-portable\.exe|\.AppImage)$/i.test(path.basename(target));
+  return versioned ? path.join(path.dirname(target), assetName) : target;
 }
 
 async function download(onProgress) {
   if (!latest || !latest.canInstall) throw new Error('No update to download');
-  const mode = latest.mode;
-  const work = mode === 'appimage' ? path.dirname(process.env.APPIMAGE) : path.join(os.tmpdir(), `vytty-update-${latest.version}`);
+  const { mode } = latest;
+  const target = mode === 'portable' ? process.env.PORTABLE_EXECUTABLE_FILE : mode === 'appimage' ? process.env.APPIMAGE : null;
+  const work = target ? path.dirname(target) : path.join(os.tmpdir(), `vytty-update-${latest.version}`);
   fs.mkdirSync(work, { recursive: true });
-  const file = path.join(work, mode === 'appimage' ? `${latest.asset.name}.download` : latest.asset.name);
+  const file = path.join(work, `${latest.asset.name}.download`);
   const ctrl = new AbortController();
   abort = () => ctrl.abort();
   let out = null;
@@ -160,28 +133,19 @@ async function download(onProgress) {
     abort = null;
   }
 
-  if (mode === 'appimage') {
-    fs.chmodSync(file, 0o755);
-    const target = process.env.APPIMAGE;
-    const versioned = /^Vytty-\d+\.\d+\.\d+\.AppImage$/i.test(path.basename(target));
-    prepared = { mode, file, target, dest: versioned ? path.join(path.dirname(target), latest.asset.name) : target };
+  if (mode !== 'folder') {
+    if (mode === 'appimage') fs.chmodSync(file, 0o755);
+    prepared = { mode, file, target, dest: destinationFor(target, latest.asset.name) };
     return latest.version;
   }
-
-  // Windows: unpack the zip now, so nothing can fail after Vytty has quit.
+  // Folder version: unpack the zip now, so nothing can fail after the swap starts.
   onProgress(0, 0, 'extract');
   const staging = path.join(work, 'files');
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true });
   const code = await run(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', file, '-C', staging]);
   if (code !== 0) throw new Error(`Unpacking the update failed (tar ${code})`);
-  const root = findAppRoot(staging);
-  if (mode === 'portable') {
-    onProgress(0, 0, 'copy');
-    prepared = { mode, target: await fillFolder(root), work };
-  } else {
-    prepared = { mode, root, work };
-  }
+  prepared = { mode, root: findAppRoot(staging), work };
   return latest.version;
 }
 
@@ -189,134 +153,106 @@ function cancel() {
   if (abort) abort();
 }
 
-// Convert the running portable version to the folder version (no download:
-// the portable launcher has already unpacked this very version to %TEMP%).
-async function convertToFolder({ shortcut } = {}) {
-  if (installMode() !== 'portable') throw new Error('Not running the portable version');
-  const target = await fillFolder(path.dirname(process.execPath));
-  prepared = { mode: 'portable', target, work: null };
-  if (shortcut) makeShortcut(target);
-  return target;
+// Move `from` aside (renaming works even while it is running) and put `src`
+// there. Returns an undo function.
+function replaceFile(dst, src, copy) {
+  const old = dst + OLD;
+  let moved = false;
+  if (fs.existsSync(dst)) {
+    fs.rmSync(old, { force: true });
+    fs.renameSync(dst, old);
+    moved = true;
+  }
+  if (copy) fs.copyFileSync(src, dst); else fs.renameSync(src, dst);
+  return () => {
+    try { fs.rmSync(dst, { force: true }); } catch { /* ignore */ }
+    if (moved) fs.renameSync(old, dst);
+  };
 }
 
-function makeShortcut(target) {
-  try {
-    shell.writeShortcutLink(path.join(app.getPath('desktop'), 'Vytty.lnk'), 'replace', {
-      target: path.join(target, 'Vytty.exe'),
-      cwd: target,
-      description: 'Vytty terminal',
-    });
-  } catch { /* ignore */ }
+function listFiles(root, rel = '') {
+  const out = [];
+  for (const d of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+    const r = path.join(rel, d.name);
+    if (!d.isDirectory()) out.push(r);
+    else if (r !== 'VyttyData') out.push(...listFiles(root, r)); // user data: never listed
+  }
+  return out;
 }
 
-// Windows batch file that finishes the job after Vytty quits. It has to be
-// detached (child processes are otherwise killed with Vytty), but a detached
-// cmd has no console, so every command in it (ping, tasklist, robocopy) would
-// pop up a console window of its own. wscript starts it with one hidden
-// console instead, which all those commands share.
-function runScript(lines) {
-  const base = path.join(os.tmpdir(), `vytty-update-${Date.now()}`);
-  const script = `${base}.cmd`;
-  const launcher = `${base}.vbs`;
-  fs.writeFileSync(script, ['@echo off', 'chcp 65001 >nul', ...lines, `del /f /q "${q(launcher)}" >nul 2>&1`, '(goto) 2>nul & del "%~f0"', ''].join('\r\n'), 'utf8');
-  // UTF-16 with BOM, so paths with non-ASCII characters survive.
-  const vbs = `CreateObject("WScript.Shell").Run "cmd.exe /d /c """"${script.replace(/"/g, '""')}""""", 0, False\r\n`;
-  fs.writeFileSync(launcher, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(vbs, 'utf16le')]));
-  spawn('wscript.exe', ['//B', '//Nologo', launcher], { detached: true, stdio: 'ignore' }).unref();
-}
-
-const q = (p) => p.replace(/%/g, '%%');
-// "timeout" needs a console stdin, which a hidden detached script lacks.
-const SLEEP = 'ping -n 2 127.0.0.1 >nul';
-// Jump to `label` once this process has exited. No pipe ("tasklist | find"):
-// without a console the reading side never sees end of input and hangs.
-const WAIT_EXIT = (label) => {
-  const tmp = q(path.join(os.tmpdir(), `vytty-wait-${process.pid}.txt`));
-  return [
-    'set /a tries=0',
-    ':wait',
-    SLEEP,
-    `tasklist /fi "PID eq ${process.pid}" /nh > "${tmp}" 2>nul`,
-    `findstr /c:" ${process.pid} " "${tmp}" >nul || goto ${label}`,
-    'set /a tries+=1',
-    `if %tries% lss 60 goto wait`,
-    `:${label}`,
-    `del /f /q "${tmp}" >nul 2>&1`,
-  ];
-};
-
-// Arrange the swap; the caller then quits the app.
-function install({ shortcut } = {}) {
+// Swap the files and arrange the restart; the caller then quits the app.
+function install() {
   if (!prepared) throw new Error('Nothing prepared');
   const p = prepared;
-  if (p.mode === 'appimage') {
-    // A running AppImage can be replaced on Linux.
-    fs.renameSync(p.file, p.dest);
-    if (p.dest !== p.target) { try { fs.rmSync(p.target, { force: true }); } catch { /* ignore */ } }
+  if (p.mode === 'portable' || p.mode === 'appimage') {
+    const undo = [];
+    try {
+      if (p.dest !== p.target && fs.existsSync(p.target)) {
+        // New versioned name: the old file goes aside, removed on next start.
+        const old = p.target + OLD;
+        fs.rmSync(old, { force: true });
+        fs.renameSync(p.target, old);
+        undo.push(() => fs.renameSync(old, p.target));
+      }
+      undo.push(replaceFile(p.dest, p.file, false));
+    } catch (err) {
+      for (const u of undo.reverse()) { try { u(); } catch { /* ignore */ } }
+      throw new Error(`Could not replace ${p.target}: ${err.message}`);
+    }
     app.relaunch({ execPath: p.dest, args: [] });
     return true;
   }
-  const cleanup = p.work ? [`rd /s /q "${q(p.work)}" >nul 2>&1`] : [];
 
-  if (p.mode === 'folder') {
-    // Wait for this process to exit, then copy the new files over the old
-    // ones (robocopy retries files still held by exiting child processes).
-    const appDir = path.dirname(process.execPath);
-    runScript([
-      ...WAIT_EXIT('swap'),
-      SLEEP,
-      `robocopy "${q(p.root)}" "${q(appDir)}" /E /R:30 /W:1 /NFL /NDL /NJH /NJS /NP >nul`,
-      `start "" "${q(path.join(appDir, 'Vytty.exe'))}"`,
-      ...cleanup,
-    ]);
-    return true;
+  // Folder version. process.noAsar: Electron would otherwise treat app.asar
+  // as a folder and refuse to rename or copy it as a file.
+  const appDir = path.dirname(process.execPath);
+  const noAsar = process.noAsar;
+  process.noAsar = true;
+  const undo = [];
+  try {
+    for (const rel of listFiles(p.root)) {
+      const dst = path.join(appDir, rel);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      undo.push(replaceFile(dst, path.join(p.root, rel), true));
+    }
+    fs.writeFileSync(path.join(appDir, CLEANUP_MARK), '');
+  } catch (err) {
+    for (const u of undo.reverse()) { try { u(); } catch { /* ignore */ } }
+    throw new Error(`Could not update the files in ${appDir}: ${err.message}`);
+  } finally {
+    process.noAsar = noAsar;
   }
-
-  // portable -> folder: once Vytty has exited, remove the portable .exe, put
-  // Vytty.exe in place and start the folder version. The app normally goes
-  // into the .exe's own folder, so VyttyData stays where it is; only with a
-  // "Vytty" subfolder (Desktop, Downloads...) is it moved along. If the data
-  // cannot be moved nothing is removed and the new version is not started
-  // with empty data.
-  if (shortcut) makeShortcut(p.target);
-  const exe = process.env.PORTABLE_EXECUTABLE_FILE;
-  const newExe = path.join(p.target, 'Vytty.exe');
-  const moveData = [];
-  if (path.resolve(p.target) !== path.resolve(portableDir())) {
-    const oldData = path.join(portableDir(), 'VyttyData');
-    const newData = path.join(p.target, 'VyttyData');
-    moveData.push(
-      'set /a tries=0',
-      ':movedata',
-      `if not exist "${q(oldData)}" goto delexe`,
-      `if exist "${q(newData)}" goto delexe`,
-      `move "${q(oldData)}" "${q(newData)}" >nul 2>&1`,
-      `if exist "${q(newData)}" goto delexe`,
-      SLEEP,
-      'set /a tries+=1',
-      'if %tries% lss 120 goto movedata',
-      'goto end',
-      ':delexe',
-    );
-  }
-  runScript([
-    ...WAIT_EXIT('exited'),
-    ...moveData,
-    'set /a tries=0',
-    ':delloop',
-    `del /f /q "${q(exe)}" >nul 2>&1`,
-    `if not exist "${q(exe)}" goto place`,
-    SLEEP,
-    'set /a tries+=1',
-    'if %tries% lss 30 goto delloop',
-    ':place',
-    `move /y "${q(newExe)}.new" "${q(newExe)}" >nul 2>&1`,
-    `if exist "${q(newExe)}.new" goto end`,
-    `start "" "${q(newExe)}"`,
-    ':end',
-    ...cleanup,
-  ]);
+  try { fs.rmSync(p.work, { recursive: true, force: true }); } catch { /* ignore */ }
+  app.relaunch({ execPath: path.join(appDir, 'Vytty.exe'), args: [] });
   return true;
 }
 
-module.exports = { check, download, cancel, install, info, convertToFolder, RELEASES_URL };
+// On start: remove what the last update set aside.
+function cleanup() {
+  const mode = installMode();
+  try {
+    if (mode === 'portable' || mode === 'appimage') {
+      const file = mode === 'portable' ? process.env.PORTABLE_EXECUTABLE_FILE : process.env.APPIMAGE;
+      const dir = path.dirname(file);
+      for (const name of fs.readdirSync(dir)) {
+        if (name.endsWith(OLD) || /^Vytty-.*\.download$/i.test(name)) fs.rmSync(path.join(dir, name), { force: true });
+      }
+    } else if (mode === 'folder') {
+      const appDir = path.dirname(process.execPath);
+      const mark = path.join(appDir, CLEANUP_MARK);
+      if (!fs.existsSync(mark)) return;
+      const noAsar = process.noAsar;
+      process.noAsar = true;
+      try {
+        for (const rel of listFiles(appDir)) {
+          if (rel.endsWith(OLD)) fs.rmSync(path.join(appDir, rel), { force: true });
+        }
+      } finally {
+        process.noAsar = noAsar;
+      }
+      fs.rmSync(mark, { force: true });
+    }
+  } catch { /* try again next time */ }
+}
+
+module.exports = { check, download, cancel, install, info, cleanup, RELEASES_URL };

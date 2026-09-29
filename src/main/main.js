@@ -92,7 +92,11 @@ if (!gotLock) {
   app.on('second-instance', () => {
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
   });
-  app.whenReady().then(createWindow);
+  app.whenReady().then(() => {
+    createWindow();
+    // Remove what the last update set aside, once startup is done.
+    setTimeout(() => updater.cleanup(), 5000);
+  });
 }
 
 app.on('window-all-closed', () => {
@@ -279,8 +283,7 @@ handle('sessions:importMobaXterm', async () => {
 handle('update:check', () => updater.check());
 handle('update:download', () => updater.download((got, total, phase) => send('update:progress', got, total, phase)));
 handle('update:cancel', () => updater.cancel());
-handle('update:install', (opts) => updater.install(opts));
-handle('update:convert', (opts) => updater.convertToFolder(opts));
+handle('update:install', () => updater.install());
 
 // Custom title bar controls
 ipcMain.on('win:minimize', () => win && win.minimize());

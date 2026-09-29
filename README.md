@@ -14,7 +14,7 @@
 </p>
 
 Vytty takes the parts of MobaXterm and SecureCRT that you use every day and leaves out the rest. It is one
-portable executable: no installer, no registry, no AppData. Sessions, settings, the vault and logs all live in a
+portable executable: no installer, no registry. Sessions, settings, the vault and logs all live in a
 `VyttyData` folder next to the `.exe`, so you can carry the whole setup on a USB stick.
 
 ## Features
@@ -92,15 +92,18 @@ Catppuccin Mocha, Gruvbox Dark, Solarized Dark, Solarized Light, Monokai, One Da
 
 ## Download
 
-Grab `Vytty-x.y.z-win-x64.zip` from the [Releases](https://github.com/mtgmz14/vytty/releases) page, unzip it
-anywhere (e.g. `C:\Tools\Vytty`) and run `Vytty.exe`. The first start creates `VyttyData` next to it and asks you to
+Grab `Vytty-x.y.z-portable.exe` from the [Releases](https://github.com/mtgmz14/vytty/releases) page, put it in a
+folder of its own (e.g. `C:\Tools\Vytty`) and run it. The first start creates `VyttyData` next to it and asks you to
 set up the vault. Linux: `Vytty-x.y.z.AppImage`.
 
-`Vytty-x.y.z-portable.exe` is a single file too, but it unpacks the whole app (~275 MB) on every start, so it opens
-in 10+ seconds instead of ~2. When started, it offers to switch itself to the folder version (data included).
+The first start of each version unpacks the app once (~7 s) to `%LOCALAPPDATA%\Vytty\app\<version>`; every later
+start runs that copy directly (~1 s) and the `.exe` itself is not kept open. Older unpacked versions are removed
+automatically. Prefer no cache at all? `Vytty-x.y.z-win-x64.zip` is the same app as a plain folder: unzip it and run
+`Vytty.exe`.
 
 Vytty checks for new releases at startup and every 6 hours, asks before updating, then downloads the update and
-restarts. It can be turned off in **Settings → About**.
+restarts. No helper scripts are involved: the files in use are renamed aside, the new ones put in place, and the
+leftovers removed on the next start. It can be turned off in **Settings → About**.
 
 ## Migrating from MobaXterm
 
@@ -133,14 +136,13 @@ In MobaXterm, right-click **User sessions → Export all sessions to file** (or 
 ## Data folder
 
 ```
-Vytty/
-  Vytty.exe
-  VyttyData/
-    settings.json      UI and terminal settings, snippets
-    sessions.json      folders and sessions (no passwords)
-    vault.json         encrypted credentials
-    known_hosts.json   trusted SSH host key fingerprints
-    logs/SW-CORE-01#2026-09-26.log
+Vytty-0.9.0-portable.exe
+VyttyData/
+  settings.json      UI and terminal settings, snippets
+  sessions.json      folders and sessions (no passwords)
+  vault.json         encrypted credentials
+  known_hosts.json   trusted SSH host key fingerprints
+  logs/SW-CORE-01#2026-09-26.log
 ```
 
 ## Building from source
@@ -152,7 +154,7 @@ git clone https://github.com/mtgmz14/vytty.git
 cd vytty
 npm install
 npm start            # run from source (data goes to ./data)
-npm run dist:win     # build dist/Vytty-<version>-win-x64.zip and -portable.exe
+npm run dist:win     # build dist/Vytty-<version>-win-x64.zip and -portable.exe (needs NSIS for the latter)
 npm run dist:linux   # build an AppImage
 ```
 

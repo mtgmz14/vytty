@@ -239,9 +239,6 @@
       el('h4', { text: 'Updates' }),
       check('updates.autoCheck', 'Check for new versions automatically', '(at startup and every 6 hours)'),
       el('button.btn.small', { type: 'button', on: { click: () => App.checkUpdates(true) } }, icon('download', 12), 'Check for updates now'),
-      App.info.install && App.info.install.mode === 'portable'
-        ? el('button.btn.small', { type: 'button', style: { marginLeft: '8px' }, on: { click: () => App.offerFolderVersion(true) } }, 'Switch to the faster folder version…')
-        : null,
       el('p.muted', { style: { marginTop: '16px' }, text: 'Vytty is portable: copy the executable together with the VyttyData folder to take all sessions, settings, the vault and logs with you.' }),
       el('button.btn.small', { type: 'button', on: { click: () => vytty.win.devtools() } }, 'Developer tools'),
     ];

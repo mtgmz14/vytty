@@ -1,7 +1,7 @@
 {
   "name": "vytty",
   "productName": "Vytty",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Portable SSH / Telnet / Serial terminal with session manager, encrypted password vault, daily logs and Cisco/Linux syntax highlighting.",
   "main": "src/main/main.js",
   "author": "Vytty contributors",
@@ -24,7 +24,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --devtools",
-    "dist:win": "electron-builder --win portable zip --x64 --publish never",
+    "dist:win": "electron-builder --win zip --x64 --publish never && node scripts/build-portable.js",
     "dist:linux": "electron-builder --linux AppImage --x64 --publish never",
     "dist:mac": "electron-builder --mac zip --publish never",
     "icon": "electron scripts/make-icon.js"
@@ -76,19 +76,10 @@
           "arch": [
             "x64"
           ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
         }
       ],
       "artifactName": "Vytty-${version}-win-x64.${ext}",
       "icon": "build/icon.png"
-    },
-    "portable": {
-      "artifactName": "Vytty-${version}-portable.exe"
     },
     "linux": {
       "target": [

@@ -30,6 +30,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install NSIS (portable launcher)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { choco install nsis -y --no-progress }
       - run: npm run ${{ matrix.script }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
