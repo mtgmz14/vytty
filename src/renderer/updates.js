@@ -10,6 +10,9 @@
   let timer = null;
 
   const isPortable = () => App.info.install && App.info.install.mode === 'portable';
+  const folderNote = () => (App.info.install.folderTarget === App.info.dataDir.replace(/[\\/]VyttyData$/i, '')
+    ? `Vytty.exe and its files are unpacked into ${App.info.install.folderTarget}, next to your VyttyData (sessions, settings, vault and logs stay where they are), and the old .exe is removed.`
+    : `It goes to ${App.info.install.folderTarget}; your sessions, settings, vault and logs (VyttyData) move with it and the old .exe is removed.`);
 
   async function check(manual = false) {
     if (busy) return;
@@ -46,7 +49,7 @@
         !info.canInstall
           ? el('div.notice', { text: 'This copy cannot update itself (not a packaged release build). Download the new version from GitHub instead.' })
           : isPortable()
-            ? [el('div.notice.info', { text: `The update also switches Vytty from the single .exe to the folder version, which starts much faster. It goes to ${App.info.install.folderTarget}; your sessions, settings, vault and logs (VyttyData) move with it and the old .exe is removed.` }),
+            ? [el('div.notice.info', { text: `The update also switches Vytty from the single .exe to the folder version, which starts much faster. ${folderNote()}` }),
               el('label.check', shortcut, el('span', { text: 'Create a desktop shortcut' }))]
             : el('p.muted', { style: { fontSize: '12px' }, text: `The update (${fmtSize(info.asset.size)}) is downloaded, then Vytty restarts. Sessions, settings, the vault and logs are kept.` }),
       ],
@@ -121,7 +124,7 @@
       width: 540,
       body: [
         el('p', { text: 'The single-file .exe unpacks the whole application (about 275 MB) to a temporary folder on every start, which is why Vytty takes 10+ seconds to open.' }),
-        el('p', { text: `The folder version starts in about 2 seconds. Vytty can switch to it now: it goes to ${App.info.install.folderTarget}, your sessions, settings, vault and logs (VyttyData) move with it, and the old .exe is removed. Future updates keep working.` }),
+        el('p', { text: `The folder version starts in about 2 seconds. Vytty can switch to it now. ${folderNote()} Future updates keep working.` }),
         el('label.check', shortcut, el('span', { text: 'Create a desktop shortcut' })),
       ],
       buttons: [

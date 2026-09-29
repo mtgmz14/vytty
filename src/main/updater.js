@@ -37,10 +37,19 @@ function installMode() {
   return null;
 }
 
-// Where the folder version goes when converting from the portable .exe.
+const portableDir = () => process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || '');
+
+// Where the folder version goes when converting from the portable .exe: the
+// .exe's own folder, so VyttyData stays where it is. Only when the .exe sits
+// loose in a shared place (Desktop, Downloads, a drive root...) does it get a
+// "Vytty" subfolder instead of spilling ~100 files there.
 function folderTarget() {
-  const exeDir = process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.env.PORTABLE_EXECUTABLE_FILE || '');
-  return path.join(exeDir, 'Vytty');
+  const exeDir = portableDir();
+  const shared = [os.homedir(), ...['desktop', 'downloads', 'documents'].map((n) => { try { return app.getPath(n); } catch { return ''; } })]
+    .filter(Boolean).map((p) => path.resolve(p).toLowerCase());
+  const dir = path.resolve(exeDir);
+  const isShared = shared.includes(dir.toLowerCase()) || dir.toLowerCase() === path.parse(dir).root.toLowerCase();
+  return isShared ? path.join(exeDir, 'Vytty') : exeDir;
 }
 
 function info() {
@@ -87,8 +96,8 @@ function run(cmd, args) {
 }
 
 // robocopy exit codes below 8 mean success.
-async function copyTree(src, dst) {
-  const code = await run('robocopy.exe', [src, dst, '/E', '/R:2', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/NP']);
+async function copyTree(src, dst, extra = []) {
+  const code = await run('robocopy.exe', [src, dst, '/E', '/R:2', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', ...extra]);
   if (code >= 8) throw new Error(`Copying files failed (robocopy ${code})`);
 }
 
@@ -101,15 +110,17 @@ function findAppRoot(dir) {
   throw new Error('Vytty.exe not found in the downloaded archive');
 }
 
-// Portable -> folder: fill the target folder while this instance still runs
-// (it is a new folder, nothing in it is locked).
+// Portable -> folder: fill the target folder while this instance still runs.
+// Vytty.exe is staged as Vytty.exe.new: the running portable .exe may itself
+// be called Vytty.exe, and it stays locked until Vytty has exited.
 async function fillFolder(sourceRoot) {
   const target = folderTarget();
-  if (fs.existsSync(target) && fs.readdirSync(target).length && !fs.existsSync(path.join(target, 'Vytty.exe'))) {
+  if (target !== portableDir() && fs.existsSync(target) && fs.readdirSync(target).length && !fs.existsSync(path.join(target, 'Vytty.exe'))) {
     throw new Error(`${target} already exists and is not a Vytty folder`);
   }
   fs.mkdirSync(target, { recursive: true });
-  await copyTree(sourceRoot, target);
+  await copyTree(sourceRoot, target, ['/XF', 'Vytty.exe']);
+  fs.copyFileSync(path.join(sourceRoot, 'Vytty.exe'), path.join(target, 'Vytty.exe.new'));
   return target;
 }
 
@@ -198,11 +209,20 @@ function makeShortcut(target) {
   } catch { /* ignore */ }
 }
 
-// Windows batch file run detached after Vytty quits.
+// Windows batch file that finishes the job after Vytty quits. It has to be
+// detached (child processes are otherwise killed with Vytty), but a detached
+// cmd has no console, so every command in it (ping, tasklist, robocopy) would
+// pop up a console window of its own. wscript starts it with one hidden
+// console instead, which all those commands share.
 function runScript(lines) {
-  const script = path.join(os.tmpdir(), `vytty-update-${Date.now()}.cmd`);
-  fs.writeFileSync(script, ['@echo off', 'chcp 65001 >nul', ...lines, '(goto) 2>nul & del "%~f0"', ''].join('\r\n'), 'utf8');
-  spawn('cmd.exe', ['/d', '/c', script], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  const base = path.join(os.tmpdir(), `vytty-update-${Date.now()}`);
+  const script = `${base}.cmd`;
+  const launcher = `${base}.vbs`;
+  fs.writeFileSync(script, ['@echo off', 'chcp 65001 >nul', ...lines, `del /f /q "${q(launcher)}" >nul 2>&1`, '(goto) 2>nul & del "%~f0"', ''].join('\r\n'), 'utf8');
+  // UTF-16 with BOM, so paths with non-ASCII characters survive.
+  const vbs = `CreateObject("WScript.Shell").Run "cmd.exe /d /c """"${script.replace(/"/g, '""')}""""", 0, False\r\n`;
+  fs.writeFileSync(launcher, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(vbs, 'utf16le')]));
+  spawn('wscript.exe', ['//B', '//Nologo', launcher], { detached: true, stdio: 'ignore' }).unref();
 }
 
 const q = (p) => p.replace(/%/g, '%%');
@@ -252,36 +272,47 @@ function install({ shortcut } = {}) {
     return true;
   }
 
-  // portable -> folder: once Vytty has exited, move VyttyData into the new
-  // folder (retried while files are still held), remove the portable .exe and
-  // start the folder version. If the data cannot be moved nothing is removed
-  // and the new version is not started with empty data.
+  // portable -> folder: once Vytty has exited, remove the portable .exe, put
+  // Vytty.exe in place and start the folder version. The app normally goes
+  // into the .exe's own folder, so VyttyData stays where it is; only with a
+  // "Vytty" subfolder (Desktop, Downloads...) is it moved along. If the data
+  // cannot be moved nothing is removed and the new version is not started
+  // with empty data.
   if (shortcut) makeShortcut(p.target);
   const exe = process.env.PORTABLE_EXECUTABLE_FILE;
-  const oldData = path.join(path.dirname(exe), 'VyttyData');
-  const newData = path.join(p.target, 'VyttyData');
+  const newExe = path.join(p.target, 'Vytty.exe');
+  const moveData = [];
+  if (path.resolve(p.target) !== path.resolve(portableDir())) {
+    const oldData = path.join(portableDir(), 'VyttyData');
+    const newData = path.join(p.target, 'VyttyData');
+    moveData.push(
+      'set /a tries=0',
+      ':movedata',
+      `if not exist "${q(oldData)}" goto delexe`,
+      `if exist "${q(newData)}" goto delexe`,
+      `move "${q(oldData)}" "${q(newData)}" >nul 2>&1`,
+      `if exist "${q(newData)}" goto delexe`,
+      SLEEP,
+      'set /a tries+=1',
+      'if %tries% lss 120 goto movedata',
+      'goto end',
+      ':delexe',
+    );
+  }
   runScript([
-    ...WAIT_EXIT('data'),
-    'set /a tries=0',
-    ':movedata',
-    `if not exist "${q(oldData)}" goto delexe`,
-    `if exist "${q(newData)}" goto delexe`,
-    `move "${q(oldData)}" "${q(newData)}" >nul 2>&1`,
-    `if exist "${q(newData)}" goto delexe`,
-    SLEEP,
-    'set /a tries+=1',
-    'if %tries% lss 120 goto movedata',
-    'goto end',
-    ':delexe',
+    ...WAIT_EXIT('exited'),
+    ...moveData,
     'set /a tries=0',
     ':delloop',
     `del /f /q "${q(exe)}" >nul 2>&1`,
-    `if not exist "${q(exe)}" goto start`,
+    `if not exist "${q(exe)}" goto place`,
     SLEEP,
     'set /a tries+=1',
     'if %tries% lss 30 goto delloop',
-    ':start',
-    `start "" "${q(path.join(p.target, 'Vytty.exe'))}"`,
+    ':place',
+    `move /y "${q(newExe)}.new" "${q(newExe)}" >nul 2>&1`,
+    `if exist "${q(newExe)}.new" goto end`,
+    `start "" "${q(newExe)}"`,
     ':end',
     ...cleanup,
   ]);
