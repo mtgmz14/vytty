@@ -209,8 +209,11 @@ npm run dist:win     # dist/Vytty-<version>-win-x64.zip and -portable.exe (needs
 npm run dist:linux   # build an AppImage
 ```
 
-Pushing a `v*` tag runs the tests, builds Windows and Linux binaries, starts each one once as a smoke test, signs
-the checksum list for the updater, attests the build provenance and publishes the release.
+Pushing a `v*` tag runs the tests, builds Windows and Linux binaries, starts each one once as a smoke test, attests
+the build provenance and creates the release. The updater's signing key is kept offline, so the release waits as a
+draft until `npm run release:sign -- v<version>` - run where the key is kept - has checked every file against the
+checksum list and its provenance, signed the list and published the release. With the repository secret
+`VYTTY_UPDATE_SIGNING_KEY` set, the workflow signs and publishes on its own.
 
 ## Tech
 

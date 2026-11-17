@@ -10,8 +10,10 @@ Please report security problems privately through
 Every release is built by this repository's GitHub Actions workflow from the tagged source.
 
 - `SHA256SUMS.txt` lists the SHA-256 of every file (`Get-FileHash` on Windows, `sha256sum -c` on Linux).
-- `SHA256SUMS.txt.sig` is an Ed25519 signature of that list. Vytty checks it - with the public key in
-  `src/main/update-keys.js` - before it installs an update, and refuses files that do not match.
+- `SHA256SUMS.txt.sig` is an Ed25519 signature of that list. The signing key is kept offline: the maintainer
+  signs a release only after checking every file against the list and its build provenance
+  (`scripts/sign-release.js`). Vytty checks the signature - with the public key in `src/main/update-keys.js` -
+  before it installs an update, and refuses files that do not match.
 - Build provenance: `gh attestation verify <file> --repo mtgmz14/vytty` proves the file was produced by this
   repository's workflow (Sigstore / SLSA provenance).
 

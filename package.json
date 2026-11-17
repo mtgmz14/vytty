@@ -34,6 +34,7 @@
     "dist:linux": "electron-builder --linux AppImage --x64 --publish never",
     "dist:mac": "electron-builder --mac zip --publish never",
     "checksums": "node scripts/checksums.js dist",
+    "release:sign": "node scripts/sign-release.js",
     "icon": "electron scripts/make-icon.js"
   },
   "dependencies": {

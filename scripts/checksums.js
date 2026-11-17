@@ -1,7 +1,8 @@
 // Writes SHA256SUMS.txt for the release files in a folder and, when the
 // update signing key is available (env VYTTY_UPDATE_SIGNING_KEY, a PEM Ed25519
 // private key), SHA256SUMS.txt.sig - the signature Vytty checks before it
-// installs an update.
+// installs an update. Without the key the release workflow leaves a draft
+// that scripts/sign-release.js signs offline.
 // Usage: node scripts/checksums.js <dir> [--require-signature]
 const fs = require('fs');
 const path = require('path');
