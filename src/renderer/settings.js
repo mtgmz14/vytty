@@ -411,9 +411,11 @@
     const rerender = () => {
       nav.replaceChildren(...Object.keys(sections).map((k) => el(`button${k === current ? '.active' : ''}`, { type: 'button', on: { click: () => { current = k; rerender(); } } }, icon(icons[k], 14), k)));
       content.replaceChildren(...[].concat(sections[current]()).filter(Boolean));
+      const scroller = content.closest('.modal-body');
+      if (scroller) scroller.scrollTop = 0;
     };
     rerender();
-    await modal({ title: 'Settings', width: 820, className: 'tall', body: el('div.settings', nav, content), buttons: [{ label: 'Done', primary: true }] });
+    await modal({ title: 'Settings', width: 820, className: 'tall', focus: 'primary', body: el('div.settings', nav, content), buttons: [{ label: 'Done', primary: true }] });
     await App.saveSettings();
   }
 

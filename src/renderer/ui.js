@@ -88,7 +88,9 @@
   // ------------------------------------------------------------- modals
   const modalStack = [];
 
-  function modal({ title, body, buttons = [], width = 460, onClose, className = '' }) {
+  // focus: 'auto' (first field, as before) or 'primary' (the main button - for
+  // long dialogs such as Settings, so they open scrolled to the top).
+  function modal({ title, body, buttons = [], width = 460, onClose, className = '', focus = 'auto' }) {
     const overlay = document.getElementById('overlay');
     closeMenu();
     return new Promise((resolve) => {
@@ -133,8 +135,10 @@
       overlay.append(box);
       overlay.classList.add('show');
       requestAnimationFrame(() => {
-        const f = box.querySelector('[autofocus]') || box.querySelector('input:not([type=checkbox]):not([disabled]), select, textarea') || footer.querySelector('.btn.primary');
-        if (f) f.focus();
+        const f = focus === 'primary'
+          ? footer.querySelector('.btn.primary')
+          : box.querySelector('[autofocus]') || box.querySelector('input:not([type=checkbox]):not([disabled]), select, textarea') || footer.querySelector('.btn.primary');
+        if (f) f.focus({ preventScroll: focus === 'primary' });
       });
     });
   }

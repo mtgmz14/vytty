@@ -1,49 +1,221 @@
 name: Build & release
 
+# Every push and pull request: unit + integration tests and a headless
+# end-to-end run of the app. Tags v*: Windows and Linux builds (each started
+# once as a smoke test), signed checksums for the in-app updater, build
+# provenance attestations and the GitHub release.
+#
+# Optional code signing (see docs/PODPISYWANIE.md) - nothing to configure for
+# unsigned builds:
+#   SignPath.io (free for open source): variables SIGNPATH_ORGANIZATION_ID,
+#     SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG; secret SIGNPATH_API_TOKEN
+#   a .pfx certificate: secrets WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD
+#   Azure Artifact Signing: variables AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT,
+#     AZURE_SIGNING_PROFILE, AZURE_SIGNING_PUBLISHER; secrets AZURE_TENANT_ID,
+#     AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+# Update signing (required for releases): secret VYTTY_UPDATE_SIGNING_KEY.
+
 on:
   push:
+    branches: [main]
     tags: ['v*']
+  pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            script: dist:win
-            files: |
-              dist/*.zip
-              dist/*.exe
-          - os: ubuntu-latest
-            script: dist:linux
-            files: dist/*.AppImage
-    runs-on: ${{ matrix.os }}
+  test:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: End-to-end test (Electron without a display)
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: test/e2e/out
+          if-no-files-found: ignore
+
+  windows:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+      AZURE_SIGNING_PUBLISHER: ${{ vars.AZURE_SIGNING_PUBLISHER }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - name: Install NSIS (portable launcher)
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           if (-not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { choco install nsis -y --no-progress }
-      - run: npm run ${{ matrix.script }}
+
+      - name: Build the app folder
+        shell: pwsh
+        run: |
+          $a = @('--win', 'dir', '--x64', '--publish', 'never')
+          if ($env:AZURE_SIGNING_ENDPOINT) {
+            $a += "-c.win.azureSignOptions.endpoint=$env:AZURE_SIGNING_ENDPOINT"
+            $a += "-c.win.azureSignOptions.codeSigningAccountName=$env:AZURE_SIGNING_ACCOUNT"
+            $a += "-c.win.azureSignOptions.certificateProfileName=$env:AZURE_SIGNING_PROFILE"
+            $a += "-c.win.azureSignOptions.publisherName=$env:AZURE_SIGNING_PUBLISHER"
+          }
+          npx electron-builder @a
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      # --- SignPath, step 1: Vytty.exe, before it is packed into the zip and the launcher
+      - name: Upload Vytty.exe for signing
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        id: unsigned-exe
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-exe
+          path: dist/win-unpacked/Vytty.exe
+      - name: Sign Vytty.exe (SignPath)
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: vytty-exe
+          github-artifact-id: ${{ steps.unsigned-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-exe
+      - name: Use the signed Vytty.exe
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: Copy-Item signed-exe\Vytty.exe dist\win-unpacked\Vytty.exe -Force
+
+      - name: Package (zip + portable launcher)
+        run: node scripts/package-win.js
+
+      # --- SignPath, step 2: the portable launcher
+      - name: Upload the launcher for signing
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        id: unsigned-portable
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-portable
+          path: dist/Vytty-*-portable.exe
+      - name: Sign the launcher (SignPath)
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: vytty-portable
+          github-artifact-id: ${{ steps.unsigned-portable.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-portable
+      - name: Use the signed launcher
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: Get-ChildItem signed-portable\*.exe | Copy-Item -Destination dist\ -Force
+
+      - name: Smoke test (the app starts, loads its UI and exits)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath 'dist\win-unpacked\Vytty.exe' -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Vytty.exe smoke test failed (exit $($p.ExitCode))" }
+          $version = node -p "require('./package.json').version"
+          $exe = (Get-Item "dist\Vytty-$version-portable.exe").FullName
+          Start-Process -FilePath $exe -ArgumentList '--smoke-test' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA "Vytty\app\$version"
+          for ($i = 0; $i -lt 60 -and -not (Test-Path "$dir\.complete"); $i++) { Start-Sleep 1 }
+          if (-not (Test-Path "$dir\.complete")) { throw 'The portable launcher did not unpack the app' }
+          Wait-Process -Name Vytty -Timeout 90 -ErrorAction SilentlyContinue
+          Get-AuthenticodeSignature dist\win-unpacked\Vytty.exe, $exe | Format-Table Status, SignerCertificate, Path -AutoSize
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vytty-windows
+          path: |
+            dist/Vytty-*-win-x64.zip
+            dist/Vytty-*-portable.exe
+          if-no-files-found: error
+
+  linux:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:linux
+      - name: Smoke test
+        run: dist/linux-unpacked/vytty --smoke-test --ozone-platform=headless --no-sandbox --disable-gpu
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vytty-linux
+          path: dist/Vytty-*.AppImage
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: vytty-*
+          path: release
+          merge-multiple: true
+      - name: Checksums and update signature
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/upload-artifact@v4
+          VYTTY_UPDATE_SIGNING_KEY: ${{ secrets.VYTTY_UPDATE_SIGNING_KEY }}
+        run: node scripts/checksums.js release --require-signature
+      - name: Build provenance (gh attestation verify <file> --repo ${{ github.repository }})
+        uses: actions/attest-build-provenance@v4
         with:
-          name: vytty-${{ matrix.os }}
-          path: ${{ matrix.files }}
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ matrix.files }}
+          subject-path: release/Vytty-*
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/release-notes.js "$version" > notes.md
+          gh release create "$GITHUB_REF_NAME" release/* --title "Vytty $version" --notes-file notes.md --verify-tag

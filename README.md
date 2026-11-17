@@ -6,7 +6,8 @@
 
 <p align="center">
   <b>A portable, minimal terminal for network and Linux work.</b><br>
-  SSH · Telnet · Serial · Local shells · SFTP · Encrypted password vault · Daily logs · Cisco / Nexus / Linux highlighting
+  SSH · Telnet · Serial · Local shells · SFTP · Encrypted password vault · Daily logs · Cisco / Nexus / Linux highlighting<br>
+  Imports from MobaXterm, PuTTY, SecureCRT, mRemoteNG and OpenSSH · NetBox sync · Verified updates
 </p>
 
 <p align="center">
@@ -36,6 +37,19 @@ portable executable: no installer, no registry. Sessions, settings, the vault an
 - Duplicate, open all sessions in a folder, save a quick-connect tab as a session
 - Import / export (passwords optionally included, encrypted with an export password)
 - **Import from MobaXterm** (`.mxtsessions` / `MobaXterm.ini`): folders (nested), hosts, ports, users, key paths, SSH gateways and serial settings for hundreds of sessions at once; SSH/Telnet/Serial/Shell/SFTP mapped, other types skipped and reported — reads the username from the session field, the host (`user@host`) or the session name, so it lines up with your credentials
+
+**Integrations**
+- **Import** sessions from **MobaXterm**, **PuTTY / KiTTY** (`.reg` export), **SecureCRT** (XML export or the session
+  folder), **mRemoteNG** (`confCons.xml`, passwords included), **OpenSSH** `~/.ssh/config` (ProxyJump, forwards) and
+  **CSV** (Excel, CMDB / IPAM exports). Importing the same file twice does not duplicate anything
+- **Export** to an OpenSSH config, CSV and an **Ansible** inventory (groups from folders, `ansible_network_os` from
+  the highlighting profile)
+- **NetBox**: every device (and optionally VM) becomes a session, in folders by site / role / tenant; syncing again
+  updates them. The API token is kept in the vault
+- **ssh:// and telnet:// links** (Windows, opt-in): links in NetBox, Zabbix, LibreNMS or a wiki open a tab in Vytty -
+  the saved session for that host if there is one
+- **Open with**: WinSCP, FileZilla, PuTTY, Windows Terminal, Remote Desktop, VNC, a device's web UI or any program
+  from a session's menu, plus ping and traceroute in a tab
 
 **Password vault**
 - Every saved session can have its own password / key passphrase
@@ -83,29 +97,58 @@ portable executable: no installer, no registry. Sessions, settings, the vault an
 - Tab rename, drag to reorder, color, activity indicator, close others / to the right
 - Visual or audible bell, 20 000 lines of scrollback (configurable)
 
-**Themes**
+**Look**
 
-12 built-in themes that style both the UI and the terminal: Vytty Dark, Vytty Light, Dracula, Nord, Tokyo Night,
-Catppuccin Mocha, Gruvbox Dark, Solarized Dark, Solarized Light, Monokai, One Dark, Green Phosphor.
+Three interface styles - **Minimal** (flat, square, hairline borders; the default), **Compact** (denser, for long
+session lists) and **Rounded** - and 18 themes that colour both the UI and the terminal: Graphite, Paper, Mono Dark,
+Mono Light, Classic, Amber, Vytty Dark, Vytty Light, Dracula, Nord, Tokyo Night, Catppuccin Mocha, Gruvbox Dark,
+Solarized Dark, Solarized Light, Monokai, One Dark, Green Phosphor.
 
 <p align="center"><img src="docs/screenshot-themes.png" alt="Theme picker" width="780"></p>
 
 ## Download
 
-Grab `Vytty-x.y.z-portable.exe` from the [Releases](https://github.com/mtgmz14/vytty/releases) page, put it in a
-folder of its own (e.g. `C:\Tools\Vytty`) and run it. The first start creates `VyttyData` next to it and asks you to
-set up the vault. Linux: `Vytty-x.y.z.AppImage`.
+Grab a file from the [Releases](https://github.com/mtgmz14/vytty/releases) page:
 
-The first start of each version unpacks the app once (~7 s) to `%LOCALAPPDATA%\Vytty\app\<version>`; every later
-start runs that copy directly (~1 s) and the `.exe` itself is not kept open. Older unpacked versions are removed
-automatically. Prefer no cache at all? `Vytty-x.y.z-win-x64.zip` is the same app as a plain folder: unzip it and run
-`Vytty.exe`.
+| File | |
+| --- | --- |
+| `Vytty-x.y.z-portable.exe` | one file; put it in a folder of its own (e.g. `C:\Tools\Vytty`) and run it |
+| `Vytty-x.y.z-win-x64.zip` | the same app as a plain folder: unzip and run `Vytty.exe`. **Best for work PCs** with endpoint protection - no self-extracting launcher |
+| `Vytty-x.y.z.AppImage` | Linux |
 
-Vytty checks for new releases at startup and every 6 hours, asks before updating, then downloads the update and
-restarts. No helper scripts are involved: the files in use are renamed aside, the new ones put in place, and the
-leftovers removed on the next start. It can be turned off in **Settings → About**.
+The first start creates `VyttyData` next to the program and asks you to set up the vault. The portable `.exe`
+unpacks the app once per version (~7 s) to `%LOCALAPPDATA%\Vytty\app\<version>`; every later start runs that copy
+(~1 s) and the `.exe` itself is not kept open.
 
-## Migrating from MobaXterm
+**Verifying a download.** `SHA256SUMS.txt` in every release lists the SHA-256 of each file (`Get-FileHash` on
+Windows, `sha256sum -c --ignore-missing SHA256SUMS.txt` on Linux), and `gh attestation verify <file> --repo
+mtgmz14/vytty` proves the file was built by this repository's GitHub Actions workflow.
+
+**Updates.** Vytty checks for new releases at startup and every 6 hours and asks before it does anything. An update
+is installed only when its SHA-256 matches the release's checksum list *and* that list carries a valid Ed25519
+signature from the key built into Vytty - a modified or corrupted file is refused. The portable `.exe` is not
+replaced while in use: the new version is saved next to it and started, and the old file is removed after the new
+version has started. No helper programs or scripts are involved. In **Settings → About** you can switch to *Only
+tell me* (Vytty never downloads anything - the right choice on managed work PCs) or turn the check off. Copies
+installed with winget are updated with `winget upgrade`.
+
+**Endpoint protection (CrowdStrike, Defender).** The binaries are not code-signed yet, so machine-learning based
+scanners may flag a new release. See [docs/PODPISYWANIE.md](docs/PODPISYWANIE.md) (Polish) for what triggers it, what
+0.10 changed, free signing options and what to send to your security team.
+
+## Migrating from MobaXterm, PuTTY, SecureCRT, mRemoteNG
+
+**Settings → Import / export → Import from other tools** reads:
+- **PuTTY / KiTTY**: `reg export HKCU\Software\SimonTatham\PuTTY\Sessions putty.reg` (KiTTY:
+  `HKCU\Software\9bis.com\KiTTY\Sessions`), then import `putty.reg`
+- **SecureCRT**: *File → Export Settings… → XML*, or point Vytty at the session folder
+  (`%APPDATA%\VanDyke\Config\Sessions`)
+- **mRemoteNG**: `confCons.xml` (usually `%APPDATA%\mRemoteNG`); its passwords go into Vytty's vault (a protected
+  file asks for its master password)
+- **OpenSSH**: `~/.ssh/config` - `Host *` defaults, `ProxyJump` (as a jump host), `LocalForward` / `DynamicForward`
+- **CSV**: a header row with any of `name, host, port, protocol, username, folder, notes, key, serial, baud, platform`
+
+### MobaXterm
 
 In MobaXterm, right-click **User sessions → Export all sessions to file** (or a folder → *Export sessions from this folder*) to get a `.mxtsessions` file. In Vytty open **Settings → Import / export → Import MobaXterm sessions…** and pick that file. Folders (including nested ones), hostnames, ports, usernames, private-key paths, SSH gateways and serial parameters are imported in one go, for hundreds of sessions at a time. SSH, Telnet, Serial, Shell and SFTP sessions are mapped; RDP/VNC/browser and other types Vytty does not speak are skipped and counted in the summary.
 
@@ -136,7 +179,7 @@ In MobaXterm, right-click **User sessions → Export all sessions to file** (or 
 ## Data folder
 
 ```
-Vytty-0.9.0-portable.exe
+Vytty-0.10.0-portable.exe
 VyttyData/
   settings.json      UI and terminal settings, snippets
   sessions.json      folders and sessions (no passwords)
@@ -144,6 +187,12 @@ VyttyData/
   known_hosts.json   trusted SSH host key fingerprints
   logs/SW-CORE-01#2026-09-26.log
 ```
+
+## Code signing policy
+
+The Windows binaries are not Authenticode-signed yet; the release workflow is prepared for signing through the
+SignPath Foundation (free for open source), a certificate file or Azure Artifact Signing. The policy - who builds,
+reviews and approves signed releases - and the privacy statement are in [SECURITY.md](SECURITY.md).
 
 ## Building from source
 
@@ -154,11 +203,14 @@ git clone https://github.com/mtgmz14/vytty.git
 cd vytty
 npm install
 npm start            # run from source (data goes to ./data)
-npm run dist:win     # build dist/Vytty-<version>-win-x64.zip and -portable.exe (needs NSIS for the latter)
+npm test             # unit and integration tests (SSH / Telnet against local test servers)
+npm run test:e2e     # end-to-end: drives the app without a window (Linux needs no display)
+npm run dist:win     # dist/Vytty-<version>-win-x64.zip and -portable.exe (needs NSIS for the latter)
 npm run dist:linux   # build an AppImage
 ```
 
-Pushing a `v*` tag builds Windows and Linux binaries on GitHub Actions and attaches them to the release.
+Pushing a `v*` tag runs the tests, builds Windows and Linux binaries, starts each one once as a smoke test, signs
+the checksum list for the updater, attests the build provenance and publishes the release.
 
 ## Tech
 
@@ -169,8 +221,8 @@ sandboxed with context isolation; all network and file access goes through a sma
 ## Roadmap
 
 - Split panes inside a tab
-- X11 forwarding, RDP/VNC launchers
-- Recursive SFTP folder transfers
+- X11 forwarding
+- Microsoft Store (MSIX) and winget packages
 
 ## Po polsku
 
@@ -178,7 +230,12 @@ Vytty to przenośny (portable) terminal SSH / Telnet / Serial dla sieciowców i 
 folderami, zaszyfrowany sejf haseł dla każdej sesji, podświetlanie składni Cisco Catalyst / Nexus / Linux, dzienne
 pliki logów per urządzenie (`hostname#RRRR-MM-DD.log` - wszystkie sesje na to samo urządzenie danego dnia dopisują
 się do jednego pliku), kopiowanie po zaznaczeniu i wklejanie prawym przyciskiem, multi-exec, panel SFTP, snippety,
-12 motywów i automatyczne aktualizacje. Wszystkie dane są w folderze `VyttyData` obok pliku `Vytty.exe`.
+18 motywów w trzech stylach (Minimal, Compact, Rounded) i weryfikowane automatyczne aktualizacje (podpis Ed25519,
+bez skryptów pomocniczych, tryb „tylko powiadamiaj” dla komputerów służbowych). Import sesji z MobaXterm, PuTTY,
+SecureCRT, mRemoteNG, `~/.ssh/config` i CSV, eksport do `ssh_config`, CSV i inwentarza Ansible, synchronizacja
+z NetBoxem, obsługa linków `ssh://` / `telnet://` i „Otwórz w…” (WinSCP, PuTTY, RDP...). Wszystkie dane są
+w folderze `VyttyData` obok pliku `Vytty.exe`. Audyt wersji 0.10: [docs/AUDYT-0.10.0.md](docs/AUDYT-0.10.0.md),
+podpisywanie i CrowdStrike: [docs/PODPISYWANIE.md](docs/PODPISYWANIE.md).
 
 ## License
 

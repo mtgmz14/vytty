@@ -24,6 +24,10 @@ function resolveDataDir() {
   if (!app.isPackaged) return path.join(__dirname, '..', '..', 'data');
   // Microsoft Store (MSIX) builds run from a read-only folder.
   if (process.windowsStore) return path.join(app.getPath('appData'), 'Vytty');
+  // winget replaces its package folder on upgrade: keep the data outside it.
+  if (/[\\/]Microsoft[\\/]WinGet[\\/]Packages[\\/]/i.test(process.execPath)) {
+    return path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'Vytty', 'VyttyData');
+  }
   const exe = portableExe();
   if (exe) return path.join(path.dirname(exe), 'VyttyData');
   if (process.env.PORTABLE_EXECUTABLE_DIR) return path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'VyttyData');
