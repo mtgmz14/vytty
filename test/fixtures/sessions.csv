@@ -1,0 +1,6 @@
+Name;Hostname;Port;Protocol;User;Folder;Description;Platform;Serial
+core-sw01;10.0.0.1;22;ssh;admin;DC/Core;"Core; main";Cisco NX-OS;
+edge-rtr;admin@10.0.0.254/24;;telnet;;DC/Edge;;IOS-XE;
+console;;;serial;;Lab;;;COM5
+;;;ssh;;;no host;;
+web01;web01.example.com;2222;;deploy;;;Ubuntu;

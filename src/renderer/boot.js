@@ -242,6 +242,9 @@
     App.Snippets.init();
     initSidePanels();
     App.emit('tab-changed', null);
+    // The UI is usable: the main process may deliver ssh:// links now (and CI's
+    // smoke test of a packaged build ends here).
+    vytty.ready();
 
     vytty.win.onCloseRequest(async () => {
       const live = App.tabs.filter((t) => t.state === 'connected');

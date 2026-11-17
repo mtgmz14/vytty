@@ -22,6 +22,8 @@
       }
       if (!manual && App.settings.updates.skipVersion === info.version) return;
       if (!manual && UI.hasModal()) return; // don't interrupt a dialog; the next check will ask
+      // "Only tell me": never download from inside Vytty.
+      if (App.settings.updates.install === 'notify') info = { ...info, canInstall: false, reason: info.reason || 'Download the new version from GitHub (Settings → About: updates set to "Only tell me").' };
       await offer(info);
     } finally {
       busy = false;
@@ -37,8 +39,8 @@
         el('p', { text: `Vytty ${info.version} is available. You have ${info.current}.` }),
         notes ? el('div.pre.muted', { style: { maxHeight: '220px', overflow: 'auto', fontSize: '12px', marginBottom: '12px' }, text: notes }) : null,
         info.canInstall
-          ? el('p.muted', { style: { fontSize: '12px' }, text: `The update (${fmtSize(info.asset.size)}) is downloaded, then Vytty restarts. Sessions, settings, the vault and logs are kept.` })
-          : el('div.notice', { text: 'This copy cannot update itself (not a packaged release build). Download the new version from GitHub instead.' }),
+          ? el('p.muted', { style: { fontSize: '12px' }, text: `The update${info.asset.size ? ` (${fmtSize(info.asset.size)})` : ''} is downloaded and checked against the release's signed checksums, then Vytty restarts. Sessions, settings, the vault and logs are kept.` })
+          : el('div.notice', { text: info.reason || 'Download the new version from GitHub.' }),
       ],
       buttons: [
         { label: 'Skip this version', value: 'skip', left: true },
@@ -68,6 +70,7 @@
     let finished = false;
     const off = vytty.update.onProgress((got, total, phase) => {
       if (phase === 'extract') { bar.style.width = '100%'; label.textContent = 'Unpacking…'; return; }
+      if (phase === 'verify') { bar.style.width = '100%'; label.textContent = 'Checking the signature…'; return; }
       bar.style.width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%` : '0%';
       label.textContent = total ? `${fmtSize(got)} of ${fmtSize(total)}` : fmtSize(got);
     });
@@ -90,6 +93,7 @@
       err.textContent = e.message;
       err.classList.remove('hidden');
       label.textContent = 'The update was not installed. You can download it from GitHub instead.';
+      err.append(' ', el('a', { href: '#', text: 'Open the download page', on: { click: (ev) => { ev.preventDefault(); vytty.openExternal(info.page); } } }));
     } finally {
       off();
     }

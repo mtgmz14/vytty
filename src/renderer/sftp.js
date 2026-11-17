@@ -167,7 +167,9 @@
     if (!usable(t)) { toast('SFTP needs a connected SSH tab', 'error'); return; }
     if (!locals.length) return;
     const st = stateOf(t);
-    if (!st.cwd) st.cwd = await vytty.sftp.op(t.connId, 'realpath', { path: '.' });
+    if (!st.cwd) {
+      try { st.cwd = await vytty.sftp.op(t.connId, 'realpath', { path: '.' }); } catch (err) { toast(`SFTP: ${err.message}`, 'error'); return; }
+    }
     const target = remoteDir || st.cwd;
     try {
       const n = await vytty.sftp.op(t.connId, 'uploadPaths', { locals, remoteDir: target });
@@ -326,9 +328,11 @@
       if (r.unknown) {
         // Dropped somewhere we can't see (another app, a network folder...).
         const pick = await confirmBox('Where to save?', 'Vytty could not tell where the file was dropped. Choose a folder to download it to?', { okLabel: 'Choose folder…' });
-        if (!pick || !usable(tab)) return;
+        // The drag may have come from another tab than the one shown now.
+        const source = App.tabs.find((t) => t.connId === r.id) || null;
+        if (!pick || !source || !usable(source)) { if (pick) toast('That connection is closed', 'error'); return; }
         try {
-          const dir = await vytty.sftp.downloadTo(tab.connId, r.items);
+          const dir = await vytty.sftp.downloadTo(source.connId, r.items);
           if (dir) toast(`Downloaded to ${dir}`, 'ok');
         } catch (err) { toast(`Download failed: ${err.message}`, 'error'); }
         App.setTransfer(null);

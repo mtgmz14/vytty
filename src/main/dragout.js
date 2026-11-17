@@ -5,13 +5,22 @@
 // mouse. So we drag empty placeholders with the real names from a unique temp
 // folder. Explorer copies them to wherever the user drops; we then find where
 // they landed and download the real content straight into them.
+//
+// Finding the drop uses file system notifications only: the user's folders are
+// watched while the drag is in progress. Earlier versions asked a hidden
+// PowerShell (Shell.Application COM) for the folders open in Explorer, which
+// endpoint protection (CrowdStrike, Defender for Endpoint...) rightly treats as
+// suspicious behaviour for an unsigned app. No child processes are started here.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
 
 const DRAG_ROOT = path.join(os.tmpdir(), 'vytty-drag');
+
+// Profile folders that are never a drop target and are busy enough to flood
+// a recursive watcher (browser caches live in AppData).
+const SKIP_DIRS = new Set(['appdata', 'application data', 'local settings', 'node_modules', 'scoop', 'go', 'miniconda3', 'anaconda3']);
 
 // Create 0-byte files (or empty folders) named like the remote items.
 function makePlaceholders(items) {
@@ -26,23 +35,34 @@ function makePlaceholders(items) {
   return { dir, files };
 }
 
-// Folders the user most likely dropped into: Desktop, Downloads, Documents and
-// every folder open in an Explorer window.
-function candidateDirs() {
-  const home = os.homedir();
-  const base = [path.join(home, 'Desktop'), path.join(home, 'Downloads'), path.join(home, 'Documents'), path.join(home, 'OneDrive', 'Desktop')];
-  if (process.platform !== 'win32') return Promise.resolve(base);
-  const ps = [
-    '[Environment]::GetFolderPath("Desktop")',
-    '[Environment]::GetFolderPath("CommonDesktopDirectory")',
-    '(New-Object -ComObject Shell.Application).Windows() | ForEach-Object { try { $_.Document.Folder.Self.Path } catch {} }',
-  ].join('; ');
-  return new Promise((resolve) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
-      const found = err ? [] : String(stdout).split(/\r?\n/).map((s) => s.trim()).filter((s) => /^[a-zA-Z]:\\/.test(s));
-      resolve([...new Set([...found, ...base])]);
-    });
-  });
+// The well-known folders a drop most likely lands in.
+function knownDirs(home = os.homedir()) {
+  const out = [path.join(home, 'Desktop'), path.join(home, 'Downloads'), path.join(home, 'Documents'), path.join(home, 'OneDrive', 'Desktop')];
+  for (const v of [process.env.OneDrive, process.env.OneDriveCommercial]) if (v) out.push(v, path.join(v, 'Desktop'));
+  if (process.env.PUBLIC) out.push(path.join(process.env.PUBLIC, 'Desktop'));
+  return [...new Set(out)];
+}
+
+// [dir, recursive] pairs to watch while a drag is in progress. On Windows and
+// macOS recursive watching is a single kernel subscription per folder, so every
+// top-level folder of the profile (except AppData & co.) is covered. On Linux
+// recursive watching walks the whole tree, so only the known folders are used.
+function watchTargets(home = os.homedir(), platform = process.platform) {
+  const targets = [[home, false]];
+  const recursive = platform === 'win32' || platform === 'darwin';
+  if (recursive) {
+    let entries = [];
+    try { entries = fs.readdirSync(home, { withFileTypes: true }); } catch { /* ignore */ }
+    for (const e of entries) {
+      // Junctions ("My Documents", "Cookies"...) are not directories here.
+      if (!e.isDirectory() || e.name.startsWith('.') || SKIP_DIRS.has(e.name.toLowerCase())) continue;
+      targets.push([path.join(home, e.name), true]);
+    }
+  }
+  for (const d of knownDirs(home)) {
+    if (!targets.some(([t]) => t === d || (recursive && d.startsWith(t + path.sep)))) targets.push([d, false]);
+  }
+  return targets.filter(([d]) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
 }
 
 // A dropped copy: same name, still empty, created after the drag started.
@@ -58,27 +78,67 @@ function isPlaceholder(p, isDir, since) {
   }
 }
 
-// Look for the dropped placeholder of `first` in the candidate folders and in
-// their recently changed subfolders (a drop onto a folder icon). Explorer copies
-// asynchronously, so poll for a few seconds.
-async function locateDrop(first, since) {
-  const dirs = await candidateDirs();
+// Start watching before the drag begins; result() resolves with the folder
+// the first item was dropped into, or null. Explorer copies asynchronously,
+// so the watchers stay up for a few seconds after the drop and the known
+// folders (and their recently changed subfolders) are polled as a fallback.
+function watchDrop(first, since, { home, platform, timeoutMs = 4000 } = {}) {
   const name = path.posix.basename(first.path);
-  for (let attempt = 0; attempt < 16; attempt++) {
-    for (const d of dirs) {
-      if (path.resolve(d).toLowerCase().startsWith(DRAG_ROOT.toLowerCase())) continue;
-      if (isPlaceholder(path.join(d, name), first.isDir, since)) return d;
-      let subs = [];
-      try { subs = fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()); } catch { continue; }
-      for (const e of subs) {
-        const sub = path.join(d, e.name);
-        try { if (fs.statSync(sub).mtimeMs < since - 2000) continue; } catch { continue; }
-        if (isPlaceholder(path.join(sub, name), first.isDir, since)) return sub;
-      }
-    }
-    await new Promise((r) => setTimeout(r, 250));
+  const isDragTemp = (p) => path.resolve(p).toLowerCase().startsWith(DRAG_ROOT.toLowerCase());
+  const watchers = [];
+  let found = null;
+  let settle;
+  const done = new Promise((r) => { settle = r; });
+  const check = (p) => {
+    if (found || isDragTemp(p) || !isPlaceholder(p, first.isDir, since)) return;
+    found = path.dirname(p);
+    settle(found);
+  };
+
+  for (const [dir, recursive] of watchTargets(home, platform)) {
+    try {
+      const w = fs.watch(dir, { recursive, persistent: false }, (_ev, file) => {
+        if (!file || found) return;
+        const rel = String(file);
+        if (path.basename(rel) !== name) return;
+        const p = path.join(dir, rel);
+        check(p);
+        if (!found) setTimeout(() => check(p), 150);
+      });
+      w.on('error', () => {});
+      watchers.push(w);
+    } catch { /* folder not watchable: polled below */ }
   }
-  return null;
+
+  const poll = async (deadline) => {
+    const dirs = knownDirs(home);
+    while (!found && Date.now() < deadline) {
+      for (const d of dirs) {
+        if (found) break;
+        check(path.join(d, name));
+        let subs = [];
+        try { subs = fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()); } catch { continue; }
+        for (const e of subs) {
+          const sub = path.join(d, e.name);
+          try { if (fs.statSync(sub).mtimeMs < since - 2000) continue; } catch { continue; }
+          check(path.join(sub, name));
+        }
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  };
+
+  return {
+    async result() {
+      const deadline = Date.now() + timeoutMs;
+      const timer = new Promise((r) => setTimeout(r, timeoutMs));
+      await Promise.race([done, Promise.all([poll(deadline), timer])]);
+      for (const w of watchers) { try { w.close(); } catch { /* ignore */ } }
+      return found;
+    },
+    close() { for (const w of watchers) { try { w.close(); } catch { /* ignore */ } } },
+    get watching() { return watchers.length; },
+  };
 }
 
-module.exports = { makePlaceholders, locateDrop, DRAG_ROOT };
+module.exports = { makePlaceholders, watchDrop, watchTargets, knownDirs, isPlaceholder, DRAG_ROOT };

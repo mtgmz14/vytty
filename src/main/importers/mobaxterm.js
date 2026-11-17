@@ -12,6 +12,8 @@
 // plaintext connection metadata; passwords are added separately in Vytty.
 
 const crypto = require('crypto');
+const os = require('os');
+const path = require('path');
 
 // Bytes 0x80-0x9F of Windows-1252 that differ from Latin-1.
 const CP1252 = {
@@ -35,9 +37,13 @@ const unescape = (s) => (s || '')
   .replace(/__APOS__/g, "'")
   .replace(/__DQUOTE__/g, '"');
 
-// MobaXterm replaces the drive letter of key paths with "_CurrentDrive_"
-// (keeping the following ":"). Normalise both forms back to "C:".
-const fixPath = (s) => unescape(s).replace(/_CurrentDrive_:?/g, 'C:');
+// MobaXterm writes some key paths relative to its own placeholders:
+// "_CurrentDrive_:" (the drive MobaXterm runs from), "_ProfileDir_" (the
+// user's profile) and "_MyDocuments_".
+const fixPath = (s) => unescape(s)
+  .replace(/_CurrentDrive_:?/g, 'C:')
+  .replace(/_ProfileDir_/g, os.homedir())
+  .replace(/_MyDocuments_/g, path.join(os.homedir(), 'Documents'));
 
 const TYPES = { 0: 'ssh', 1: 'telnet', 7: 'ssh', 8: 'serial', 10: 'local' };
 const TYPE_LABEL = { 0: 'SSH', 1: 'Telnet', 2: 'RSH', 3: 'XDMCP', 4: 'RDP', 5: 'VNC', 6: 'FTP', 7: 'SFTP', 8: 'Serial', 9: 'File', 10: 'Shell', 11: 'Browser', 12: 'Mosh', 13: 'AWS S3', 16: 'WSL' };
@@ -109,6 +115,29 @@ function parse(buf) {
 
   for (const s of sessions) delete s._srcType;
 
+  // One jump session per distinct gateway, in a "Jump hosts" folder.
+  const jumps = new Map();
+  for (const s of sessions.slice()) {
+    const gw = s._gateway;
+    delete s._gateway;
+    if (!gw) continue;
+    const key = `${gw.username}@${gw.host}:${gw.port}`.toLowerCase();
+    let jump = jumps.get(key);
+    if (!jump) {
+      jump = {
+        id: uid(),
+        name: `jump ${gw.username ? `${gw.username}@` : ''}${gw.host}${gw.port !== 22 ? `:${gw.port}` : ''}`,
+        folderId: folderFor('Jump hosts'),
+        protocol: 'ssh', host: gw.host, port: gw.port, username: gw.username,
+        highlight: 'auto', logging: true, notes: 'SSH gateway imported from MobaXterm',
+      };
+      jumps.set(key, jump);
+      sessions.push(jump);
+      stats.byType['SSH gateway'] = (stats.byType['SSH gateway'] || 0) + 1;
+    }
+    s.jumpId = jump.id;
+  }
+
   // Drop folders left empty because their only sessions were of a skipped type.
   // Keep a folder if a session lives in it, or if a kept folder descends from it.
   const used = new Set();
@@ -170,13 +199,14 @@ function parseSession(name, value, folderId) {
     const s = { ...base, protocol: 'ssh', host, port: Number(params[2]) || 22, username };
     const keyPath = fixPath(params[14] || '').trim();
     if (keyPath) s.keyPath = keyPath;
-    // SSH gateway (jump host): keep it in notes so nothing is lost.
-    const gwHost = unescape(params[8] || '').trim();
+    // SSH gateway (jump host): becomes a jump session (created in parse()).
+    // MobaXterm allows a chain separated by "|"; Vytty uses the first hop.
+    const gwHost = unescape(params[8] || '').trim().split('|')[0].trim();
     if (gwHost) {
-      const gwUser = unescape(params[10] || '').split('|')[0];
-      const gwPort = (params[9] || '22').split('|')[0];
-      const gw = `Jump host: ${gwUser ? `${gwUser}@` : ''}${gwHost.split('|')[0]}:${gwPort}`;
-      s.notes = s.notes ? `${s.notes}\n${gw}` : gw;
+      const gwUser = unescape(params[10] || '').split('|')[0].trim();
+      const gwPort = Number((params[9] || '22').split('|')[0]) || 22;
+      s._gateway = { host: gwHost, port: gwPort, username: gwUser };
+      if (/\|/.test(params[8] || '')) s.notes = `${s.notes ? `${s.notes}\n` : ''}MobaXterm gateway chain ${unescape(params[8])}: only the first hop is used`;
     }
     if (typeId === 7) s.notes = s.notes ? `${s.notes}\n(MobaXterm SFTP session)` : '(MobaXterm SFTP session)';
     return s;

@@ -52,6 +52,139 @@
     return out + (open ? '</span>' : '');
   }
 
+  const INSTALL_LABEL = {
+    portable: 'Portable .exe - updates itself',
+    folder: 'Folder from the .zip - updates itself',
+    appimage: 'AppImage - updates itself',
+    winget: 'Installed with winget - update with: winget upgrade mtgmz14.Vytty',
+    store: 'Microsoft Store - updated by the Store',
+  };
+
+  // Settings -> Integrations: NetBox, ssh:// links, external tools.
+  function integrationsPane(s, set, field, check, select, text, rerender) {
+    const nb = s.integrations.netbox;
+    const out = [el('h3', { text: 'Integrations' })];
+
+    // ------------------------------------------------------------ NetBox
+    const token = el('input.input', { type: 'password', autocomplete: 'new-password', spellcheck: false, placeholder: App.vault.unlocked ? 'API token (read-only is enough)' : 'Unlock the vault to store the token' });
+    if (App.vault.unlocked) {
+      vytty.vault.get('integration:netbox').then((v) => { if (v && v.token) token.placeholder = 'Saved in the vault - leave empty to keep it'; }).catch(() => {});
+    }
+    const status = el('div.notice.hidden');
+    const show = (msg, kind) => { status.className = `notice ${kind || 'info'}`; status.textContent = msg; };
+    const saveToken = async () => {
+      const t = token.value.trim();
+      if (!t) return true;
+      if (!App.vault.unlocked) { show('Unlock the vault (status bar) to store the token.', 'danger'); return false; }
+      await vytty.vault.set('integration:netbox', { token: t });
+      token.value = '';
+      token.placeholder = 'Saved in the vault - leave empty to keep it';
+      return true;
+    };
+    const busy = (btn, on) => { btn.disabled = on; };
+    const testBtn = el('button.btn', { type: 'button' }, 'Test connection');
+    const syncBtn = el('button.btn.primary', { type: 'button' }, 'Sync now');
+    testBtn.addEventListener('click', async () => {
+      busy(testBtn, true);
+      try {
+        const r = await vytty.netbox.test(App.Integrations.netboxOpts(nb, token.value.trim() || undefined));
+        show(`Connected to NetBox ${r.version}.`, 'ok');
+      } catch (e) { show(e.message, 'danger'); }
+      busy(testBtn, false);
+    });
+    syncBtn.addEventListener('click', async () => {
+      busy(syncBtn, true);
+      try {
+        if (await saveToken()) {
+          await App.saveSettings();
+          const r = await App.Integrations.netboxSync();
+          if (r) show(`Synced: ${r.added} added, ${r.updated} updated.`, 'ok');
+        }
+      } catch (e) { show(e.message, 'danger'); }
+      busy(syncBtn, false);
+    });
+    out.push(
+      el('h4', { text: 'NetBox' }),
+      el('p.muted', { text: 'Creates a session for every device (and optionally VM) in NetBox, in folders by site and role. Syncing again updates them; your own changes to credentials, colours and logging are kept.' }),
+      field('NetBox URL', text('integrations.netbox.url', { placeholder: 'https://netbox.example.com' })),
+      field('API token', token, 'Stored encrypted in the vault, never in settings.json.'),
+      el('div.field-row',
+        field('Device filter', text('integrations.netbox.deviceFilter', { placeholder: 'status=active&site=waw1&role=switch' }), 'NetBox API query parameters'),
+        field('Group into folders by', select('integrations.netbox.groupBy', [['site/role', 'Site / role'], ['site', 'Site'], ['tenant/site', 'Tenant / site'], ['role', 'Role'], ['none', 'No subfolders']]))),
+      el('div.field-row',
+        field('Connect to', select('integrations.netbox.hostFrom', [['ip', 'Primary IP'], ['dns', 'DNS name of the primary IP'], ['name', 'Device name']])),
+        field('Domain for device names', text('integrations.netbox.domain', { placeholder: 'optional, e.g. corp.example' })),
+        field('Protocol', select('integrations.netbox.protocol', [['ssh', 'SSH'], ['telnet', 'Telnet']])),
+        field('Username', text('integrations.netbox.username', { placeholder: 'optional' }))),
+      check('integrations.netbox.includeVMs', 'Include virtual machines'),
+      el('div.btn-row', testBtn, syncBtn),
+      status,
+      nb.lastSync ? el('p.muted', { text: `Last sync: ${new Date(nb.lastSync).toLocaleString()}` }) : null);
+
+    // ------------------------------------------------------------- links
+    const linkInfo = el('p.muted', { text: 'Checking…' });
+    const linkBtn = el('button.btn', { type: 'button', disabled: true }, '…');
+    const refreshLinks = async () => {
+      let st;
+      try { st = await vytty.urlHandler.status(); } catch { st = { available: false }; }
+      if (!st.available) {
+        linkInfo.textContent = App.info.platform === 'win32' ? 'Available in the release builds.' : 'Available on Windows.';
+        linkBtn.classList.add('hidden');
+        return;
+      }
+      linkInfo.textContent = st.registered ? `ssh:// and telnet:// links open in Vytty (${st.exe}).` : 'ssh:// and telnet:// links open in another program (or nowhere).';
+      linkBtn.disabled = false;
+      linkBtn.textContent = st.registered ? 'Stop handling links' : 'Open ssh:// and telnet:// links with Vytty';
+      linkBtn.onclick = async () => {
+        try {
+          await vytty.urlHandler.set(!st.registered);
+          set('integrations.urlHandler', !st.registered);
+        } catch (e) { toast(e.message, 'error'); }
+        refreshLinks();
+      };
+    };
+    refreshLinks();
+    out.push(
+      el('h4', { text: 'ssh:// and telnet:// links' }),
+      el('p.muted', { text: 'Clicking an ssh:// or telnet:// link (in NetBox, Zabbix, LibreNMS, a wiki...) opens a tab in Vytty - the saved session for that host if there is one. Links only open connections; they cannot run commands.' }),
+      linkInfo, el('div.btn-row', linkBtn));
+
+    // ---------------------------------------------------- external tools
+    const tools = s.externalTools;
+    const list = el('div');
+    const saveTools = () => set('externalTools', tools);
+    const renderTools = () => {
+      list.replaceChildren(...(tools.length ? tools.map((t) => {
+        const name = el('input.input', { type: 'text', value: t.name || '', placeholder: 'Name' });
+        const prog = el('input.input', { type: 'text', value: t.type === 'url' ? '(web browser)' : (t.path || ''), placeholder: 'Program path', disabled: t.type === 'url', spellcheck: false });
+        const args = el('input.input.mono', { type: 'text', value: t.args || '', placeholder: '{host} {port} {user}', spellcheck: false });
+        const upd = () => { t.name = name.value; if (t.type !== 'url') t.path = prog.value.trim(); t.args = args.value; saveTools(); };
+        [name, prog, args].forEach((n) => n.addEventListener('input', upd));
+        const browse = el('button.icon-btn', { type: 'button', title: 'Browse…', disabled: t.type === 'url', on: { click: async () => { const p = await vytty.dialog.openFile({ title: 'Program' }); if (p) { prog.value = p; upd(); } } } }, icon('folder', 14));
+        const del = el('button.icon-btn', { type: 'button', title: 'Remove', on: { click: () => { tools.splice(tools.indexOf(t), 1); saveTools(); renderTools(); } } }, icon('trash', 14));
+        return el('div.tool-row', name, prog, args, browse, del);
+      }) : [el('p.muted', { text: 'No tools yet. Add WinSCP, PuTTY, Remote Desktop, a web UI... and open them from a session\'s menu (Open with).' })]));
+    };
+    renderTools();
+    const addPreset = async (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      let presets = [];
+      try { presets = await vytty.tools.presets(); } catch { /* ignore */ }
+      UI.contextMenu(r.left, r.bottom + 2, [
+        ...presets.map((p) => ({ label: `${p.name}${p.installed ? '' : ' (not found)'}`, action: () => { tools.push({ id: uid(), enabled: true, ...p, installed: undefined }); saveTools(); renderTools(); } })),
+        '-',
+        { label: 'Custom program…', action: () => { tools.push({ id: uid(), enabled: true, name: 'New tool', type: 'program', path: '', args: '{host}', protocols: ['ssh', 'telnet'] }); saveTools(); renderTools(); } },
+        { label: 'Custom web address…', action: () => { tools.push({ id: uid(), enabled: true, name: 'Web UI', type: 'url', args: 'https://{host}/', protocols: ['ssh', 'telnet'] }); saveTools(); renderTools(); } },
+      ]);
+    };
+    out.push(
+      el('h4', { text: 'External tools' }),
+      el('p.muted', { text: 'Placeholders: {host} {port} {user} {userAt} {name} {protocol} {keyPath}. Programs are started directly (no shell), only when you pick them.' }),
+      list,
+      el('div.btn-row', el('button.btn.small', { type: 'button', on: { click: addPreset } }, icon('plus', 12), 'Add tool')));
+    return out;
+  }
+
   async function openSettings(section = 'Appearance') {
     const s = App.settings;
     const save = debounce(() => App.saveSettings(), 250);
@@ -94,9 +227,14 @@
         html: `<span style="color:${th.term.green}">user@host</span>:<span style="color:${th.term.blue}">~</span>$ ls<br><span style="color:${th.term.cyan}">10.0.0.1</span> <span style="color:${th.term.red}">down</span> <span style="color:${th.term.green}">up</span>` }),
       el('div.tname', { text: th.name, style: { background: th.ui.panel, color: th.ui.text } }))));
       paint();
+      const styles = el('div.segmented', Object.entries(VYTTY_UI_STYLES).map(([id, st]) => el(`button${(s.uiStyle || 'minimal') === id ? '.active' : ''}`, {
+        type: 'button', title: st.desc, on: { click: async () => { await App.setStyle(id); rerender(); } },
+      }, st.name)));
       return [
         el('h3', { text: 'Appearance' }),
-        el('h4', { text: 'Theme' }), grid,
+        el('h4', { text: 'Interface' }), styles,
+        el('p.muted', { style: { marginTop: '-4px' }, text: (VYTTY_UI_STYLES[s.uiStyle] || VYTTY_UI_STYLES.minimal).desc }),
+        el('h4', { text: 'Colours' }), grid,
         el('h4', { text: 'Terminal font' }),
         el('div.field-row',
           field('Font family', text('fontFamily'), 'Any installed monospace font, comma separated fallbacks'),
@@ -213,19 +351,38 @@
     sections.Credentials = () => App.Credentials.pane(rerender);
 
     // -------------------------------------------------------- sessions
-    sections['Import / export'] = () => [
-      el('h3', { text: 'Import / export sessions' }),
-      el('p.muted', { text: 'Export writes all folders and sessions to a JSON file. Passwords are included only when you give an export password (they are encrypted with it).' }),
-      el('div', { style: { display: 'flex', gap: '8px' } },
-        el('button.btn', { type: 'button', on: { click: exportSessions } }, icon('download', 14), 'Export…'),
-        el('button.btn', { type: 'button', on: { click: importSessions } }, icon('upload', 14), 'Import Vytty file…')),
-      el('h4', { text: 'Import from MobaXterm' }),
-      el('p.muted', { text: 'In MobaXterm: right-click "User sessions" → "Export all sessions to file", or right-click a folder → "Export sessions from this folder". Then import the .mxtsessions file here. Folders, hosts, ports, users, key paths and serial settings are imported.' }),
-      el('div.notice', { text: 'MobaXterm session files do not contain passwords - it keeps those encrypted in the Windows registry. After importing, set one password per username (Settings → Credentials), paste passwords per host in bulk, or let Vytty save each one the first time you connect.' }),
-      el('div', { style: { display: 'flex', gap: '8px' } },
-        el('button.btn.primary', { type: 'button', on: { click: importMobaXterm } }, icon('upload', 14), 'Import MobaXterm sessions…'),
-        el('button.btn', { type: 'button', on: { click: bulkPasswords } }, icon('key', 14), 'Add passwords in bulk…')),
-    ];
+    sections['Import / export'] = () => {
+      const IMPORTS = [
+        ['mobaxterm', 'MobaXterm…'], ['putty', 'PuTTY / KiTTY (.reg)…'], ['securecrt', 'SecureCRT (XML)…'], ['securecrt-dir', 'SecureCRT session folder…'],
+        ['mremoteng', 'mRemoteNG…'], ['sshconfig', 'OpenSSH config…'], ['csv', 'CSV…'],
+      ];
+      const help = el('p.muted', { style: { fontSize: '12px', minHeight: '18px' }, text: 'Point at a button to see where to get the file.' });
+      const importBtn = ([fmt, label]) => el('button.btn', {
+        type: 'button',
+        on: { click: () => App.Integrations.importFrom(fmt), mouseenter: () => { help.textContent = App.Integrations.HELP[fmt] || ''; } },
+      }, label);
+      return [
+        el('h3', { text: 'Import / export' }),
+        el('h4', { text: 'Vytty' }),
+        el('p.muted', { text: 'All folders, sessions and credentials as JSON. Passwords are included only when you give an export password (they are encrypted with it).' }),
+        el('div.btn-row',
+          el('button.btn', { type: 'button', on: { click: exportSessions } }, icon('download', 14), 'Export…'),
+          el('button.btn', { type: 'button', on: { click: importSessions } }, icon('upload', 14), 'Import Vytty file…')),
+        el('h4', { text: 'Import from other tools' }),
+        el('div.btn-row', IMPORTS.map(importBtn)),
+        help,
+        el('div.notice', { text: 'MobaXterm, PuTTY and SecureCRT exports do not contain passwords. After importing, set one password per username (offered right away, or Settings → Credentials), paste passwords per host in bulk, or let Vytty save each one the first time you connect. mRemoteNG passwords are imported.' }),
+        el('div.btn-row', el('button.btn', { type: 'button', on: { click: bulkPasswords } }, icon('key', 14), 'Add passwords in bulk…')),
+        el('h4', { text: 'Export for other tools' }),
+        el('p.muted', { text: 'Passwords are never written to these files.' }),
+        el('div.btn-row',
+          el('button.btn', { type: 'button', on: { click: () => App.Integrations.exportAs('sshconfig') } }, 'OpenSSH config…'),
+          el('button.btn', { type: 'button', on: { click: () => App.Integrations.exportAs('csv') } }, 'CSV (Excel)…'),
+          el('button.btn', { type: 'button', on: { click: () => App.Integrations.exportAs('ansible') } }, 'Ansible inventory…')),
+      ];
+    };
+
+    sections.Integrations = () => integrationsPane(s, set, field, check, select, text, rerender);
 
     sections.About = () => [
       el('h3', { text: 'About Vytty' }),
@@ -238,21 +395,27 @@
         el('span.k', { text: 'License' }), el('span.v', { text: 'MIT' })),
       el('h4', { text: 'Updates' }),
       check('updates.autoCheck', 'Check for new versions automatically', '(at startup and every 6 hours)'),
+      field('When a new version is available', select('updates.install', [['ask', 'Ask, then download, verify and install it'], ['notify', 'Only tell me - I download it myself']]),
+        'Downloads are installed only when their SHA-256 matches the release\'s signed checksum list (Ed25519). "Only tell me" never downloads anything, which suits managed work PCs.'),
+      el('div.kv', { style: { margin: '6px 0 12px' } },
+        el('span.k', { text: 'Installation' }), el('span.v', { text: INSTALL_LABEL[App.info.install && App.info.install.mode] || 'Development copy' })),
       el('button.btn.small', { type: 'button', on: { click: () => App.checkUpdates(true) } }, icon('download', 12), 'Check for updates now'),
       el('p.muted', { style: { marginTop: '16px' }, text: 'Vytty is portable: copy the executable together with the VyttyData folder to take all sessions, settings, the vault and logs with you.' }),
       el('button.btn.small', { type: 'button', on: { click: () => vytty.win.devtools() } }, 'Developer tools'),
     ];
 
-    const icons = { Appearance: 'palette', 'Mouse & clipboard': 'copy', Highlighting: 'code', Logging: 'logs', Connections: 'server', 'Vault & security': 'lock', Credentials: 'key', 'Import / export': 'download', About: 'info' };
+    const icons = { Appearance: 'palette', 'Mouse & clipboard': 'copy', Highlighting: 'code', Logging: 'logs', Connections: 'server', 'Vault & security': 'lock', Credentials: 'key', 'Import / export': 'download', Integrations: 'link', About: 'info' };
     const nav = el('div.settings-nav');
     const content = el('div.settings-content');
     let current = sections[section] ? section : 'Appearance';
     const rerender = () => {
       nav.replaceChildren(...Object.keys(sections).map((k) => el(`button${k === current ? '.active' : ''}`, { type: 'button', on: { click: () => { current = k; rerender(); } } }, icon(icons[k], 14), k)));
       content.replaceChildren(...[].concat(sections[current]()).filter(Boolean));
+      const scroller = content.closest('.modal-body');
+      if (scroller) scroller.scrollTop = 0;
     };
     rerender();
-    await modal({ title: 'Settings', width: 820, className: 'tall', body: el('div.settings', nav, content), buttons: [{ label: 'Done', primary: true }] });
+    await modal({ title: 'Settings', width: 820, className: 'tall', focus: 'primary', body: el('div.settings', nav, content), buttons: [{ label: 'Done', primary: true }] });
     await App.saveSettings();
   }
 
@@ -274,11 +437,12 @@
     const idMap = {};
     for (const f of data.folders || []) folderMap[f.id] = uid();
     for (const f of data.folders || []) App.tree.folders.push({ ...f, id: folderMap[f.id], parentId: f.parentId ? folderMap[f.parentId] : null });
+    for (const s of data.sessions || []) idMap[s.id] = uid();
+    // Jump hosts point at sessions of the same file (sessions already in the
+    // tree are left alone, even if their ids happen to match).
     for (const s of data.sessions || []) {
-      idMap[s.id] = uid();
-      App.tree.sessions.push({ ...s, id: idMap[s.id], folderId: s.folderId ? folderMap[s.folderId] || null : null, jumpId: s.jumpId || null });
+      App.tree.sessions.push({ ...s, id: idMap[s.id], folderId: s.folderId ? folderMap[s.folderId] || null : null, jumpId: s.jumpId ? idMap[s.jumpId] || null : null });
     }
-    for (const s of App.tree.sessions) if (s.jumpId && idMap[s.jumpId]) s.jumpId = idMap[s.jumpId];
     const credMap = {};
     if (!App.tree.credentials) App.tree.credentials = [];
     for (const c of data.credentials || []) {
@@ -301,51 +465,6 @@
     }
     await App.saveTree();
     toast(`Imported ${(data.sessions || []).length} sessions`, 'ok');
-  }
-
-  // Merge parsed folders + sessions into the tree under fresh ids.
-  // Returns idMap (source session id -> new id) so callers can attach secrets.
-  function mergeIntoTree(folders, sessions) {
-    const folderMap = {};
-    const idMap = {};
-    for (const f of folders || []) folderMap[f.id] = uid();
-    for (const f of folders || []) App.tree.folders.push({ id: folderMap[f.id], name: f.name, parentId: f.parentId ? folderMap[f.parentId] || null : null });
-    for (const s of sessions || []) {
-      idMap[s.id] = uid();
-      App.tree.sessions.push({ ...s, id: idMap[s.id], folderId: s.folderId ? folderMap[s.folderId] || null : null });
-    }
-    return idMap;
-  }
-
-  async function importMobaXterm() {
-    let data;
-    try { data = await vytty.sessions.importMobaXterm(); } catch (e) { toast(e.message, 'error'); return; }
-    if (!data) return;
-    if (!data.sessions.length) { toast('No importable sessions found in that file', 'error'); return; }
-
-    const st = data.stats;
-    const line = (label, n) => el('div', el('span', { text: label }), el('b', { style: { float: 'right' }, text: String(n) }));
-    const byType = Object.entries(st.byType).sort((a, b) => b[1] - a[1]);
-    const skipped = Object.entries(st.skipped || {}).filter(([, n]) => n > 0);
-    const ok = await modal({
-      title: 'Import from MobaXterm',
-      width: 460,
-      body: [
-        el('p', { text: `Found ${data.sessions.length} session${data.sessions.length === 1 ? '' : 's'} in ${data.folders.length} folder${data.folders.length === 1 ? '' : 's'}.` }),
-        el('div.kv', ...byType.flatMap(([t, n]) => [el('span.k', { text: t }), el('span.v', { text: String(n) })])),
-        skipped.length ? el('p.muted', { style: { marginTop: '10px' }, text: `Skipped (Vytty has no matching protocol): ${skipped.map(([t, n]) => `${n} ${t}`).join(', ')}.` }) : null,
-        el('p.muted', { text: 'They will be added to your session tree. Passwords are not in the file - add them afterwards.' }),
-      ],
-      buttons: [{ label: 'Cancel', value: false }, { label: `Import ${data.sessions.length}`, value: true, primary: true }],
-    });
-    if (!ok) return;
-    const idMap = mergeIntoTree(data.folders, data.sessions);
-    await App.saveTree();
-    toast(`Imported ${data.sessions.length} sessions from MobaXterm`, 'ok');
-    const users = new Set(data.sessions.map((s) => s.username).filter(Boolean));
-    if (users.size && await confirmBox('Set passwords per username?', `The imported sessions use ${users.size} username${users.size > 1 ? 's' : ''} (${[...users].slice(0, 6).join(', ')}${users.size > 6 ? ', …' : ''}). Set one password for each and every session with that login will use it. You can also do it later in Settings → Credentials.`, { okLabel: 'Set passwords', cancelLabel: 'Later' })) {
-      await App.Credentials.perUser(new Set(Object.values(idMap)));
-    }
   }
 
   // Attach passwords in bulk. The user pastes one session per line:

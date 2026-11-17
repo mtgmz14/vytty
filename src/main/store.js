@@ -10,15 +10,39 @@ function readJson(file, fallback) {
   }
 }
 
-// Write to a temp file and rename so a crash never leaves half-written JSON.
+// Antivirus / EDR scanners (Defender, CrowdStrike...) briefly open files that
+// were just written; on Windows a rename over such a file then fails with
+// EPERM/EBUSY. Retry for a moment instead of losing the save.
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function renameRetry(from, to, tries = 12) {
+  for (let i = 0; ; i++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      if (i >= tries || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+      sleepSync(Math.min(25 * (i + 1), 200));
+    }
+  }
+}
+
+// Write to a temp file, flush it to disk and rename, so a crash or a power
+// cut never leaves half-written JSON behind.
 function writeJson(file, data) {
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(tmp, file);
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeFileSync(fd, JSON.stringify(data, null, 2), 'utf8');
+    try { fs.fsyncSync(fd); } catch { /* not supported everywhere */ }
+  } finally {
+    fs.closeSync(fd);
+  }
+  renameRetry(tmp, file);
 }
 
 const DEFAULT_SETTINGS = {
-  theme: 'vytty-dark',
+  theme: 'graphite',
+  uiStyle: 'minimal', // minimal | compact | rounded
   fontFamily: "'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace",
   fontSize: 14,
   lineHeight: 1.1,
@@ -53,8 +77,25 @@ const DEFAULT_SETTINGS = {
   },
   updates: {
     autoCheck: true,
+    install: 'ask', // ask: download + verify + install after asking | notify: only tell, never download
     skipVersion: '',
   },
+  integrations: {
+    urlHandler: false,
+    netbox: {
+      url: '',
+      deviceFilter: 'status=active',
+      includeVMs: false,
+      vmFilter: 'status=active',
+      hostFrom: 'ip', // ip | dns | name
+      domain: '',
+      groupBy: 'site/role',
+      protocol: 'ssh',
+      username: '',
+      lastSync: '',
+    },
+  },
+  externalTools: [],
   reconnectKey: true,
   confirmCloseConnected: true,
   sidebarWidth: 260,
@@ -69,18 +110,23 @@ const LEGACY_SNIPPETS = {
   sn4: 'Linux: system info|uname -a && uptime && df -h\\n',
 };
 
+// Saved values over the defaults. A saved value of the wrong type (a hand
+// edited or damaged file) falls back to the default instead of breaking the UI.
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 function deepMerge(base, over) {
   if (Array.isArray(base)) return Array.isArray(over) ? over : base;
   if (base && typeof base === 'object') {
     const out = { ...base };
-    if (over && typeof over === 'object') {
+    if (over && typeof over === 'object' && !Array.isArray(over)) {
       for (const k of Object.keys(over)) {
-        out[k] = k in base ? deepMerge(base[k], over[k]) : over[k];
+        if (UNSAFE_KEYS.has(k)) continue;
+        out[k] = Object.prototype.hasOwnProperty.call(base, k) ? deepMerge(base[k], over[k]) : over[k];
       }
     }
     return out;
   }
-  return over === undefined ? base : over;
+  if (over === undefined || over === null || typeof over !== typeof base) return base;
+  return over;
 }
 
 const store = {
@@ -113,4 +159,4 @@ const store = {
   writeJson,
 };
 
-module.exports = { store, DEFAULT_SETTINGS };
+module.exports = { store, DEFAULT_SETTINGS, deepMerge, renameRetry };
