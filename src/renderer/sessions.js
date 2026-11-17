@@ -39,13 +39,15 @@
   function paintSelection() {
     for (const r of document.querySelectorAll('#panel-sessions .tree-row[data-session]')) r.classList.toggle('selected', selected.has(r.dataset.session));
   }
-  const collapsed = new Set(JSON.parse(localStorage.getItem('vytty.collapsed') || '[]'));
+  const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem('vytty.collapsed') || '[]'); } catch { return []; } })());
+  // Sessions from older or imported files may carry a protocol Vytty does not know.
+  const protoOf = (s) => PROTOCOLS[s.protocol] || PROTOCOLS.ssh;
   const saveCollapsed = () => { try { localStorage.setItem('vytty.collapsed', JSON.stringify([...collapsed])); } catch { /* ignore */ } };
 
   const subtitle = (s) => {
     if (s.protocol === 'serial') return `${s.serialPath || ''} ${s.baudRate || ''}`;
     if (s.protocol === 'local') return s.shell || 'shell';
-    return `${s.username ? `${s.username}@` : ''}${s.host || ''}${s.port && s.port !== PROTOCOLS[s.protocol].port ? `:${s.port}` : ''}`;
+    return `${s.username ? `${s.username}@` : ''}${s.host || ''}${s.port && Number(s.port) !== protoOf(s).port ? `:${s.port}` : ''}`;
   };
 
   // ------------------------------------------------------------- tree
@@ -100,7 +102,7 @@
   function sessionRow(s, sub) {
     const row = el(`div.tree-row${selected.has(s.id) ? '.selected' : ''}`, {
       draggable: true,
-      title: `${s.name}\n${PROTOCOLS[s.protocol].label} ${subtitle(s)}${s.notes ? `\n\n${s.notes}` : ''}`,
+      title: `${s.name}\n${protoOf(s).label} ${subtitle(s)}${s.notes ? `\n\n${s.notes}` : ''}`,
       dataset: { session: s.id },
       on: {
         click: (e) => selectRow(s.id, e),
@@ -118,7 +120,7 @@
       },
     },
     el('span.color-dot', { style: { background: s.color || 'transparent' } }),
-    el('span.proto', icon(PROTOCOLS[s.protocol].icon, 14)),
+    el('span.proto', icon(protoOf(s).icon, 14)),
     el('span.name', { text: s.name }),
     el('span.sub', { text: sub || subtitle(s) }));
     return row;
@@ -161,6 +163,7 @@
       { label: 'Move to', icon: 'folder', submenu: [{ label: '(root)', action: () => { s.folderId = null; App.saveTree(); } }, ...App.tree.folders.map((f) => ({ label: App.folderPath(f.id), checked: s.folderId === f.id, action: () => { s.folderId = f.id; App.saveTree(); } }))] },
       '-',
       s.host ? { label: 'Copy host', action: () => vytty.clipboard.write(s.host) } : null,
+      ...App.Tools.menuItems(s),
       '-',
       { label: 'Delete', icon: 'trash', danger: true, action: () => deleteSession(s) },
     ]);
@@ -269,6 +272,7 @@
       highlight: 'auto', color: '', logging: true, forwards: [], baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1, flowControl: 'none',
       ...defaults,
     };
+    if (!PROTOCOLS[s.protocol]) s.protocol = 'ssh';
     let secret = {};
     if (!isNew && App.vault.unlocked) { try { secret = await vytty.vault.get(s.id); } catch { /* ignore */ } }
 
@@ -285,7 +289,7 @@
     // protocol picker
     const picker = el('div.proto-picker');
     const setProto = (p) => {
-      const prevDefault = PROTOCOLS[s.protocol].port;
+      const prevDefault = protoOf(s).port;
       s.protocol = p;
       if (f.port && (!f.port.value || Number(f.port.value) === prevDefault)) f.port.value = PROTOCOLS[p].port || '';
       for (const opt of picker.children) opt.classList.toggle('active', opt.dataset.p === p);
@@ -446,7 +450,7 @@
     const collect = () => {
       const out = { ...s };
       for (const k of ['name', 'host', 'username', 'keyPath', 'shell', 'shellArgs', 'cwd', 'serialPath']) out[k] = f[k].value.trim();
-      out.port = Number(f.port.value) || PROTOCOLS[out.protocol].port || '';
+      out.port = Number(f.port.value) || protoOf(out).port || '';
       out.folderId = f.folderId.value || null;
       out.useAgent = f.useAgent.checked;
       out.autoLogin = f.autoLogin.checked;
@@ -546,13 +550,17 @@
     });
   }
 
-  // Save a quick-connect tab as a real session.
-  async function saveAsSession(spec) {
-    const s = { ...spec, id: uid() };
-    delete s.jump;
-    App.tree.sessions.push(s);
-    await App.saveTree();
-    return editSession(s);
+  // Save a quick-connect tab as a real session: the editor opens prefilled and
+  // nothing is stored if it is cancelled. The tab then belongs to the session.
+  async function saveAsSession(spec, tab) {
+    const defaults = { ...spec };
+    delete defaults.jump;
+    delete defaults.id;
+    const before = new Set(App.tree.sessions.map((x) => x.id));
+    await editSession(null, defaults);
+    const created = App.tree.sessions.find((x) => !before.has(x.id));
+    if (created && tab) { tab.source = created; tab.setTitle(created.name); }
+    return created || null;
   }
 
   // ------------------------------------------------------------- init

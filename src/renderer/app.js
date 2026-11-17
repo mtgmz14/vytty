@@ -4,6 +4,16 @@
   const { el, $, icon, contextMenu, toast } = UI;
   const listeners = {};
 
+  // Interface styles (shape and density); colours come from the theme.
+  const UI_STYLES = {
+    minimal: { name: 'Minimal', desc: 'Flat, square, hairline borders' },
+    compact: { name: 'Compact', desc: 'Minimal and denser, for long session lists' },
+    rounded: { name: 'Rounded', desc: 'The original soft look' },
+  };
+  window.VYTTY_UI_STYLES = UI_STYLES;
+  // Plain prompt glyph used as the brand mark (no gradient, follows the theme).
+  const BRAND_SVG = '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="square"><path d="M3 4l4 4-4 4M8.5 12.5H13"/></svg>';
+
   const App = {
     settings: null,
     info: null,
@@ -16,7 +26,7 @@
     on(name, fn) { (listeners[name] = listeners[name] || []).push(fn); },
     emit(name, ...args) { for (const fn of listeners[name] || []) { try { fn(...args); } catch (e) { console.error(e); } } },
 
-    get theme() { return VYTTY_THEMES[App.settings.theme] || VYTTY_THEMES['vytty-dark']; },
+    get theme() { return VYTTY_THEMES[App.settings.theme] || VYTTY_THEMES.graphite; },
 
     async saveSettings() {
       // Keep the same object: dialogs hold references into it.
@@ -77,7 +87,15 @@
       for (const [k, v] of Object.entries(map)) root.style.setProperty(v, th.ui[k]);
       root.style.setProperty('--term-bg', th.term.background);
       root.classList.toggle('light', !th.dark);
+      root.dataset.ui = UI_STYLES[App.settings.uiStyle] ? App.settings.uiStyle : 'minimal';
       App.emit('theme');
+    },
+
+    async setStyle(id) {
+      App.settings.uiStyle = id;
+      App.applyTheme();
+      App.emit('layout');
+      await App.saveSettings();
     },
 
     async setTheme(id) {
@@ -87,7 +105,13 @@
     },
 
     themeMenuItems() {
-      return Object.entries(VYTTY_THEMES).map(([id, th]) => ({ label: th.name, checked: App.settings.theme === id, action: () => App.setTheme(id) }));
+      return [
+        { header: 'Interface' },
+        ...Object.entries(UI_STYLES).map(([id, st]) => ({ label: st.name, checked: (App.settings.uiStyle || 'minimal') === id, action: () => App.setStyle(id) })),
+        '-',
+        { header: 'Colours' },
+        ...Object.entries(VYTTY_THEMES).map(([id, th]) => ({ label: th.name, checked: App.settings.theme === id, action: () => App.setTheme(id) })),
+      ];
     },
 
     toggleMultiExec(force) {
@@ -109,6 +133,7 @@
   // -------------------------------------------------------- title bar
   function buildTitlebar() {
     $('.qc-icon').append(icon('zap', 14));
+    $('#titlebar .brand-mark').innerHTML = BRAND_SVG;
     const tb = $('#toolbar');
     const btn = (name, title, onClick, id) => el('button.icon-btn', { title, id, on: { click: onClick } }, icon(name));
     tb.append(
@@ -202,33 +227,39 @@
   };
 
   // --------------------------------------------------------- welcome
+  // A plain start page: actions, recent sessions and keys as text lists.
   function renderWelcome() {
     const w = $('#welcome');
-    const card = (ic, title, desc, fn) => el('button.welcome-card', { type: 'button', on: { click: fn } }, icon(ic, 20), el('b', { text: title }), el('span.d', { text: desc }));
-    const recent = [...App.tree.sessions].filter((s) => s.lastUsed).sort((a, b) => b.lastUsed - a.lastUsed).slice(0, 6);
-    const K = (keys, label) => el('div', ...keys.split(' ').map((k) => [el('kbd', { text: k }), ' ']), label);
+    const item = (label, sub, fn, extra) => el('button.welcome-item', { type: 'button', on: { click: fn } }, extra || null, el('span.name', { text: label }), sub ? (sub instanceof Node ? sub : el('span.sub', { text: sub })) : null);
+    const kbd = (k) => el('kbd', { text: k });
+    const recent = [...App.tree.sessions].filter((s) => s.lastUsed).sort((a, b) => b.lastUsed - a.lastUsed).slice(0, 8);
+    const K = (keys, label) => el('div', el('span', { text: label }), kbd(keys));
+    const shellMenu = (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      contextMenu(r.left, r.bottom + 2, localShellMenu());
+    };
     w.replaceChildren(el('div.welcome-inner',
-      el('div.welcome-title', el('span.brand-mark'), el('h1', { text: 'Vytty' })),
-      el('p.welcome-sub', { text: 'Portable SSH, Telnet, Serial and local terminal for network & Linux work.' }),
-      el('div.welcome-grid',
-        card('plus', 'New session', 'SSH, Telnet, Serial or local shell', () => App.emit('new-session')),
-        card('zap', 'Quick connect', 'user@host, telnet host, COM3', () => $('#qc-input').focus()),
-        card('terminal', 'Local shell', App.info.platform === 'win32' ? 'PowerShell, CMD, WSL' : 'Your default shell', (e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          contextMenu(r.left, r.bottom + 4, localShellMenu());
-        }),
-        card('logs', 'Session logs', 'Daily log files', () => vytty.logs.open())),
-      recent.length ? [el('h3', { text: 'Recent sessions' }), el('div.recent-list', recent.map((s) => el('div.recent-item', { on: { click: () => App.emit('open-session', s) } },
-        el('span.color-dot', { style: { width: '8px', height: '8px', borderRadius: '50%', background: s.color || 'var(--muted)' } }),
-        el('span.name', { text: s.name }),
-        el('span.sub', { text: `${s.protocol.toUpperCase()} · ${s.host || s.serialPath || s.shell || ''}` }))))] : null,
-      el('h3', { text: 'Shortcuts' }),
-      el('div.kbd-grid',
-        K('Ctrl+Shift+N', 'New session'), K('Ctrl+Shift+K', 'Quick connect'), K('Ctrl+Shift+T', 'Duplicate tab'),
-        K('Ctrl+Shift+W', 'Close tab'), K('Ctrl+Tab', 'Next tab'), K('Alt+1…9', 'Go to tab'),
-        K('Ctrl+Shift+F', 'Find in terminal'), K('Ctrl+Shift+M', 'Multi-exec'), K('Ctrl+Shift+R', 'Reconnect'),
-        K('Ctrl+Shift+C', 'Copy'), K('Ctrl+Shift+V', 'Paste'), K('Ctrl+Wheel', 'Zoom'),
-        K('Ctrl+Shift+B', 'Toggle sidebar'), K('Ctrl+Shift+L', 'Clear scrollback'), K('F11', 'Full screen'))));
+      el('div.welcome-title', el('h1', { text: 'Vytty' }), el('span.ver', { text: App.info.version })),
+      el('p.welcome-sub', { text: 'SSH, Telnet, Serial and local terminal for network and Linux work.' }),
+      el('div.welcome-section',
+        el('h3', { text: 'Start' }),
+        el('div.welcome-list',
+          item('New session…', kbd('Ctrl+Shift+N'), () => App.emit('new-session')),
+          item('Quick connect', kbd('Ctrl+Shift+K'), () => $('#qc-input').focus()),
+          item('Local shell', App.info.platform === 'win32' ? 'PowerShell, CMD, WSL…' : 'bash, zsh…', shellMenu),
+          item('Import sessions…', 'MobaXterm, PuTTY, SecureCRT, mRemoteNG, SSH config, CSV', () => App.emit('open-settings', 'Import / export')),
+          item('Session logs', 'Open the log folder', () => vytty.logs.open()))),
+      recent.length ? el('div.welcome-section',
+        el('h3', { text: 'Recent' }),
+        el('div.welcome-list', recent.map((s) => item(s.name, `${s.protocol.toUpperCase()} · ${s.host || s.serialPath || s.shell || ''}`, () => App.emit('open-session', s),
+          el('span.color-dot', { style: { background: s.color || 'var(--border)' } }))))) : null,
+      el('div.welcome-section',
+        el('h3', { text: 'Keyboard' }),
+        el('div.kbd-grid',
+          K('Ctrl+Shift+T', 'Duplicate tab'), K('Ctrl+Shift+W', 'Close tab'), K('Ctrl+Tab', 'Next tab'),
+          K('Alt+1…9', 'Go to tab'), K('Ctrl+Shift+F', 'Find in terminal'), K('Ctrl+Shift+M', 'Multi-exec'),
+          K('Ctrl+Shift+R', 'Reconnect'), K('Ctrl+Shift+C', 'Copy'), K('Ctrl+Shift+V', 'Paste'),
+          K('Ctrl+Shift+B', 'Toggle sidebar'), K('Ctrl+Shift+L', 'Clear scrollback'), K('F11', 'Full screen')))));
   }
   App.renderWelcome = renderWelcome;
   App.on('tree', () => { if (!App.tabs.length) renderWelcome(); });

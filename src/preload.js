@@ -16,6 +16,8 @@ const on = (channel, fn) => {
 
 contextBridge.exposeInMainWorld('vytty', {
   appInfo: () => call('app:info'),
+  ready: () => ipcRenderer.send('app:ready'),
+  onOpenUrl: (fn) => on('app:open-url', fn),
   settings: {
     get: () => call('settings:get'),
     save: (s) => call('settings:save', s),
@@ -26,7 +28,22 @@ contextBridge.exposeInMainWorld('vytty', {
     export: (tree, pw) => call('sessions:export', tree, pw),
     importRead: () => call('sessions:importRead'),
     importSecrets: (blob, pw, idMap) => call('sessions:importSecrets', blob, pw, idMap),
-    importMobaXterm: () => call('sessions:importMobaXterm'),
+    importFormats: () => call('import:formats'),
+    importFrom: (format, opts) => call('import:run', format, opts),
+    exportAs: (format, tree) => call('export:run', format, tree),
+  },
+  netbox: {
+    test: (opts) => call('netbox:test', opts),
+    fetch: (opts) => call('netbox:fetch', opts),
+  },
+  tools: {
+    presets: () => call('tools:presets'),
+    plan: (tool, session) => call('tools:plan', tool, session),
+    launch: (tool, session) => call('tools:launch', tool, session),
+  },
+  urlHandler: {
+    status: () => call('urlhandler:status'),
+    set: (on) => call('urlhandler:set', on),
   },
   vault: {
     status: () => call('vault:status'),

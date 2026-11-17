@@ -41,7 +41,8 @@ function writeJson(file, data) {
 }
 
 const DEFAULT_SETTINGS = {
-  theme: 'vytty-dark',
+  theme: 'graphite',
+  uiStyle: 'minimal', // minimal | compact | rounded
   fontFamily: "'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace",
   fontSize: 14,
   lineHeight: 1.1,
@@ -76,8 +77,25 @@ const DEFAULT_SETTINGS = {
   },
   updates: {
     autoCheck: true,
+    install: 'ask', // ask: download + verify + install after asking | notify: only tell, never download
     skipVersion: '',
   },
+  integrations: {
+    urlHandler: false,
+    netbox: {
+      url: '',
+      deviceFilter: 'status=active',
+      includeVMs: false,
+      vmFilter: 'status=active',
+      hostFrom: 'ip', // ip | dns | name
+      domain: '',
+      groupBy: 'site/role',
+      protocol: 'ssh',
+      username: '',
+      lastSync: '',
+    },
+  },
+  externalTools: [],
   reconnectKey: true,
   confirmCloseConnected: true,
   sidebarWidth: 260,

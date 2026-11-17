@@ -1,8 +1,12 @@
 'use strict';
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, nativeTheme, nativeImage } = require('electron');
-const { paths, ensureDirs } = require('./paths');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, nativeTheme, nativeImage, net, session } = require('electron');
+const { paths, ensureDirs, portableExe } = require('./paths');
+
+// --smoke-test: CI starts the packaged build with a throw-away data folder
+// (see paths.js), waits for the UI to come up and exits with 0, or non-zero.
+const SMOKE = process.argv.includes('--smoke-test');
 
 ensureDirs();
 // Fully portable: keep Chromium's profile inside the data folder too.
@@ -13,7 +17,11 @@ const { store } = require('./store');
 const { vault } = require('./vault');
 const logger = require('./logger');
 const { ConnectionManager, capabilities } = require('./connections');
-const mobaxterm = require('./mobaxterm');
+const { FORMATS: IMPORT_FORMATS, parseImport } = require('./importers');
+const { EXPORTERS } = require('./exporters');
+const netbox = require('./integrations/netbox');
+const tools = require('./tools');
+const urlhandler = require('./urlhandler');
 const dragout = require('./dragout');
 const updater = require('./updater');
 
@@ -44,7 +52,53 @@ const send = (channel, ...args) => {
 
 const connections = new ConnectionManager({ send, prompt, getSettings: () => settings, vault, store });
 
+// ------------------------------------------------------- ssh:// links
+// Links arrive on the command line, either at start or in a second instance;
+// they are handed to the UI once it is ready.
+let rendererReady = false;
+let pendingUrls = urlhandler.urlsFromArgv(process.argv);
+function openUrls(list) {
+  if (!list.length) return;
+  if (rendererReady) send('app:open-url', list);
+  else pendingUrls = pendingUrls.concat(list);
+}
+
+function urlHandlerTarget() {
+  // The portable launcher path survives updates of the unpacked app.
+  return portableExe() || process.execPath;
+}
+function setUrlHandler(on) {
+  if (!app.isPackaged) throw new Error('Link handling is available in the release builds only');
+  const exe = urlHandlerTarget();
+  const results = urlhandler.PROTOCOLS.map((p) => {
+    if (on) return app.setAsDefaultProtocolClient(p, exe, []);
+    if (app.isDefaultProtocolClient(p, exe, [])) return app.removeAsDefaultProtocolClient(p, exe, []);
+    return true;
+  });
+  if (on && results.some((r) => !r)) throw new Error('Windows did not accept the link registration');
+  return urlHandlerStatus();
+}
+function urlHandlerStatus() {
+  if (!app.isPackaged) return { available: false, registered: false };
+  const exe = urlHandlerTarget();
+  return { available: process.platform === 'win32', registered: urlhandler.PROTOCOLS.every((p) => app.isDefaultProtocolClient(p, exe, [])), exe };
+}
+
 // ----------------------------------------------------------------- window
+
+function harden() {
+  // The UI needs no web permissions (camera, notifications, geolocation...).
+  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
+  app.on('web-contents-created', (_e, contents) => {
+    contents.on('will-attach-webview', (ev) => ev.preventDefault());
+    contents.on('will-navigate', (ev) => ev.preventDefault());
+    contents.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+      return { action: 'deny' };
+    });
+  });
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -53,7 +107,7 @@ function createWindow() {
     minWidth: 760,
     minHeight: 480,
     frame: false,
-    backgroundColor: '#11131a',
+    backgroundColor: '#16171a',
     show: false,
     icon: path.join(__dirname, '..', '..', 'build', 'icon.png'),
     webPreferences: {
@@ -62,11 +116,12 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      webviewTag: false,
     },
   });
   Menu.setApplicationMenu(null);
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => { if (!SMOKE) win.show(); });
   let allowClose = false;
   win.on('close', (e) => {
     if (allowClose) return;
@@ -77,11 +132,16 @@ function createWindow() {
   ipcMain.on('win:forceClose', () => { allowClose = true; win.close(); });
   win.on('maximize', () => send('win:state', { maximized: true }));
   win.on('unmaximize', () => send('win:state', { maximized: false }));
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
-    return { action: 'deny' };
-  });
-  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  if (SMOKE) {
+    const fail = (code, why) => { process.stderr.write(`SMOKE FAIL: ${why}\n`); app.exit(code); };
+    win.webContents.on('render-process-gone', (_e, d) => fail(4, `renderer gone (${d.reason})`));
+    win.webContents.on('did-fail-load', (_e, code, desc) => fail(5, `load failed ${code} ${desc}`));
+    win.webContents.on('console-message', (ev) => {
+      const level = ev.level !== undefined ? ev.level : '';
+      if (level === 'error' || level === 3) process.stderr.write(`renderer: ${ev.message}\n`);
+    });
+    setTimeout(() => fail(3, 'timed out waiting for the UI'), 60000).unref();
+  }
   if (process.argv.includes('--devtools')) win.webContents.openDevTools({ mode: 'detach' });
 }
 
@@ -89,13 +149,15 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_e, argv) => {
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    openUrls(urlhandler.urlsFromArgv(argv));
   });
   app.whenReady().then(() => {
+    harden();
     createWindow();
-    // Remove what the last update set aside, once startup is done.
-    setTimeout(() => updater.cleanup(), 5000);
+    // Keep the link registration pointing at the current executable.
+    if (settings.integrations && settings.integrations.urlHandler && !SMOKE) { try { setUrlHandler(true); } catch { /* ignore */ } }
   });
 }
 
@@ -115,6 +177,22 @@ const handle = (channel, fn) => ipcMain.handle(channel, async (_e, ...args) => {
   }
 });
 
+// The UI is up: deliver queued links, then tidy up after an update.
+ipcMain.on('app:ready', () => {
+  if (SMOKE) {
+    process.stdout.write(`SMOKE OK ${app.getVersion()} ${updater.installMode() || 'dev'}\n`);
+    try { fs.rmSync(paths.dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    app.exit(0);
+    return;
+  }
+  if (rendererReady) return;
+  rendererReady = true;
+  const queued = pendingUrls;
+  pendingUrls = [];
+  openUrls(queued);
+  setTimeout(() => updater.cleanup(), 8000);
+});
+
 handle('app:info', () => ({
   version: app.getVersion(),
   dataDir: paths.dataDir,
@@ -123,6 +201,7 @@ handle('app:info', () => ({
   capabilities,
   install: updater.info(),
   systemDark: nativeTheme.shouldUseDarkColors,
+  electron: process.versions.electron,
 }));
 
 handle('settings:get', () => settings);
@@ -208,20 +287,20 @@ ipcMain.on('sftp:startDrag', async (e, id, items, deferred) => {
   const dest = await watch.result();
   try { fs.rmSync(ph.dir, { recursive: true, force: true }); } catch { /* ignore */ }
   if (!dest) {
-    send('sftp:dragResult', { ok: false, unknown: true, items });
+    send('sftp:dragResult', { ok: false, unknown: true, items, id });
     return;
   }
-  send('sftp:dragResult', { started: true, dest, count: items.length });
+  send('sftp:dragResult', { started: true, dest, count: items.length, id });
   try {
     await connections.sftpOp(id, 'downloadPaths', { items, localDir: dest });
-    send('sftp:dragResult', { ok: true, dest, count: items.length });
+    send('sftp:dragResult', { ok: true, dest, count: items.length, id });
   } catch (err) {
-    send('sftp:dragResult', { ok: false, dest, error: err.message });
+    send('sftp:dragResult', { ok: false, dest, error: err.message, id });
   }
 });
 
 handle('clipboard:read', () => clipboard.readText());
-handle('clipboard:write', (text) => clipboard.writeText(text));
+handle('clipboard:write', (text) => clipboard.writeText(String(text)));
 
 handle('dialog:openFile', async (opts) => {
   const res = await dialog.showOpenDialog(win, { properties: ['openFile', 'showHiddenFiles'], ...(opts || {}) });
@@ -238,7 +317,11 @@ handle('logs:open', () => {
   return shell.openPath(logger.logDir());
 });
 handle('logs:today', () => { logger.flush(); return logger.logDir(); });
-handle('shell:openPath', (p) => shell.openPath(p));
+// Folders only: shell.openPath on a file would run it.
+handle('shell:openPath', (p) => {
+  if (typeof p !== 'string' || !fs.existsSync(p) || !fs.statSync(p).isDirectory()) throw new Error('Not a folder');
+  return shell.openPath(p);
+});
 handle('shell:openExternal', (url) => {
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
   return null;
@@ -266,20 +349,60 @@ handle('sessions:importRead', async () => {
 });
 handle('sessions:importSecrets', (blob, password, idMap) => vault.importSecrets(blob, password, idMap));
 
-// Import a MobaXterm session file: pick, read as CP1252, parse to Vytty sessions.
-handle('sessions:importMobaXterm', async () => {
-  const res = await dialog.showOpenDialog(win, {
-    title: 'Import MobaXterm sessions',
-    properties: ['openFile'],
-    filters: [
-      { name: 'MobaXterm sessions', extensions: ['mxtsessions', 'mobaxterm', 'moba', 'ini', 'txt'] },
-      { name: 'All files', extensions: ['*'] },
-    ],
-  });
-  if (res.canceled || !res.filePaths[0]) return null;
-  const parsed = mobaxterm.parseFile(fs.readFileSync(res.filePaths[0]));
-  return { file: res.filePaths[0], ...parsed };
+// Import from other tools (MobaXterm, PuTTY, SecureCRT, mRemoteNG, OpenSSH, CSV).
+// The file is always picked in a dialog; a second call for the same file (e.g.
+// with the mRemoteNG master password) may pass the path picked before.
+const pickedImports = new Set();
+handle('import:formats', () => Object.entries(IMPORT_FORMATS).map(([id, f]) => ({ id, label: f.label, directory: !!f.directory })));
+handle('import:run', async (format, opts = {}) => {
+  const f = IMPORT_FORMATS[format];
+  if (!f) throw new Error(`Unknown format ${format}`);
+  let file = opts.file && pickedImports.has(opts.file) ? opts.file : null;
+  if (!file) {
+    const defaultPath = f.defaultPath ? f.defaultPath() : undefined;
+    const res = await dialog.showOpenDialog(win, {
+      title: `Import ${f.label} sessions`,
+      defaultPath: defaultPath && fs.existsSync(defaultPath) ? defaultPath : undefined,
+      properties: f.directory ? ['openDirectory'] : ['openFile', 'showHiddenFiles'],
+      filters: f.directory ? undefined : [...f.filters, { name: 'All files', extensions: ['*'] }],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    file = res.filePaths[0];
+    pickedImports.add(file);
+  }
+  if (!f.directory && fs.statSync(file).size > 64 * 1024 * 1024) throw new Error('The file is too large to be a session export');
+  const parsed = parseImport(format, f.directory ? file : fs.readFileSync(file), { password: opts.password });
+  return { file, format, label: f.label, ...parsed };
 });
+handle('export:run', async (format, tree) => {
+  const ex = EXPORTERS[format];
+  if (!ex) throw new Error(`Unknown format ${format}`);
+  const res = await dialog.showSaveDialog(win, { title: `Export as ${ex.label}`, defaultPath: ex.defaultName, filters: ex.filters });
+  if (res.canceled || !res.filePath) return null;
+  fs.writeFileSync(res.filePath, ex.run(tree), 'utf8');
+  return res.filePath;
+});
+
+// NetBox: the API token is kept in the vault ("integration:netbox").
+const netboxOpts = (opts) => {
+  let token = opts && opts.token;
+  if (!token) {
+    try { token = vault.get('integration:netbox').token; } catch { throw new Error('Unlock the vault to use the stored NetBox token'); }
+  }
+  return { ...opts, token };
+};
+const fetchViaChromium = (url, init) => net.fetch(url, init); // system proxy + Windows certificate store
+handle('netbox:test', (opts) => netbox.testConnection(fetchViaChromium, netboxOpts(opts)));
+handle('netbox:fetch', (opts) => netbox.fetchSessions(fetchViaChromium, netboxOpts(opts)));
+
+// External tools
+handle('tools:presets', () => tools.presets());
+handle('tools:plan', (tool, s) => tools.plan(tool, s));
+handle('tools:launch', (tool, s) => tools.launch(tool, s, (url) => shell.openExternal(url)));
+
+// ssh:// telnet:// link handling
+handle('urlhandler:status', () => urlHandlerStatus());
+handle('urlhandler:set', (on) => setUrlHandler(!!on));
 
 // Updates from GitHub releases
 handle('update:check', () => updater.check());

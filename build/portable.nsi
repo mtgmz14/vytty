@@ -5,7 +5,12 @@
 ; This launcher unpacks each version once, to %LOCALAPPDATA%\Vytty\app\<version>,
 ; and afterwards just starts it (~1-2 s). It then exits, so the .exe is not held
 ; open while Vytty runs. Sessions, settings, the vault and logs stay in
-; VyttyData next to the .exe (the app finds it through PORTABLE_EXECUTABLE_DIR).
+; VyttyData next to the .exe (the app gets the launcher's path as the
+; --vytty-portable-exe=... argument).
+;
+; No NSIS plugins are used: the System plugin (formerly used to set environment
+; variables) is a DLL that NSIS unpacks to %TEMP% and loads at run time, which
+; endpoint protection treats as a dropper pattern.
 ;
 ; Build: makensis /DVERSION=1.2.3 /DAPP_DIR=dist\win-unpacked /DOUT_FILE=dist\Vytty-1.2.3-portable.exe build\portable.nsi
 
@@ -30,7 +35,8 @@ SubCaption 4 " "
 
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "Vytty"
-VIAddVersionKey "FileDescription" "Vytty terminal"
+VIAddVersionKey "CompanyName" "Vytty (github.com/mtgmz14/vytty)"
+VIAddVersionKey "FileDescription" "Vytty portable terminal"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "MIT License"
@@ -42,11 +48,9 @@ Page instfiles
 Var appRoot
 
 Function RunApp
-  System::Call 'Kernel32::SetEnvironmentVariable(t "PORTABLE_EXECUTABLE_DIR", t "$EXEDIR") i'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "PORTABLE_EXECUTABLE_FILE", t "$EXEPATH") i'
   ${GetParameters} $R0
   SetOutPath "$INSTDIR"
-  Exec '"$INSTDIR\Vytty.exe" $R0'
+  Exec '"$INSTDIR\Vytty.exe" "--vytty-portable-exe=$EXEPATH" $R0'
 FunctionEnd
 
 ; Remove cached versions other than this one. A version that is still running

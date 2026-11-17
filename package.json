@@ -1,8 +1,8 @@
 {
   "name": "vytty",
   "productName": "Vytty",
-  "version": "0.9.1",
-  "description": "Portable SSH / Telnet / Serial terminal with session manager, encrypted password vault, daily logs and Cisco/Linux syntax highlighting.",
+  "version": "0.10.0",
+  "description": "Portable SSH / Telnet / Serial terminal with session manager, encrypted password vault, daily logs, Cisco / Linux syntax highlighting and imports from MobaXterm, PuTTY, SecureCRT and mRemoteNG.",
   "main": "src/main/main.js",
   "author": "Vytty contributors",
   "license": "MIT",
@@ -12,21 +12,28 @@
     "url": "https://github.com/mtgmz14/vytty.git"
   },
   "keywords": [
+    "cisco",
+    "electron",
+    "mobaxterm",
+    "netbox",
+    "portable",
+    "putty",
+    "securecrt",
+    "serial",
+    "sftp",
     "ssh",
     "telnet",
-    "serial",
-    "terminal",
-    "cisco",
-    "sftp",
-    "portable",
-    "electron"
+    "terminal"
   ],
   "scripts": {
     "start": "electron .",
     "dev": "electron . --devtools",
-    "dist:win": "electron-builder --win zip --x64 --publish never && node scripts/build-portable.js",
+    "test": "node --test \"test/unit/*.test.js\"",
+    "test:e2e": "node test/e2e/run.js",
+    "dist:win": "electron-builder --win dir --x64 --publish never && node scripts/package-win.js",
     "dist:linux": "electron-builder --linux AppImage --x64 --publish never",
     "dist:mac": "electron-builder --mac zip --publish never",
+    "checksums": "node scripts/checksums.js dist",
     "icon": "electron scripts/make-icon.js"
   },
   "dependencies": {
@@ -37,7 +44,8 @@
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
     "serialport": "^13.0.0",
-    "ssh2": "^1.17.0"
+    "ssh2": "^1.17.0",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "electron": "^44.11.3",
@@ -72,21 +80,24 @@
     "win": {
       "target": [
         {
-          "target": "zip",
+          "target": "dir",
           "arch": [
             "x64"
           ]
         }
       ],
-      "artifactName": "Vytty-${version}-win-x64.${ext}",
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "legalTrademarks": "",
+      "requestedExecutionLevel": "asInvoker"
     },
     "linux": {
       "target": [
         "AppImage"
       ],
       "category": "Network",
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "artifactName": "Vytty-${version}.${ext}",
+      "executableName": "vytty"
     },
     "mac": {
       "target": [
@@ -94,6 +105,14 @@
       ],
       "category": "public.app-category.developer-tools"
     },
-    "npmRebuild": false
+    "npmRebuild": false,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": true
+    }
   }
 }

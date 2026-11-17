@@ -337,7 +337,8 @@
         { label: this.state === 'closed' ? 'Reconnect' : 'Reconnect (restart)', icon: 'refresh', shortcut: 'Ctrl+Shift+R', action: () => this.connect() },
         { label: 'Duplicate tab', icon: 'copy', shortcut: 'Ctrl+Shift+T', action: () => App.openSession(this.source) },
         { label: 'Rename tab', icon: 'edit', action: () => this.rename() },
-        saved ? { label: 'Edit session…', icon: 'settings', action: () => App.emit('edit-session', saved) } : { label: 'Save as session…', icon: 'plus', action: () => App.Sessions.saveAsSession(this.source) },
+        saved ? { label: 'Edit session…', icon: 'settings', action: () => App.emit('edit-session', saved) } : { label: 'Save as session…', icon: 'plus', action: () => App.Sessions.saveAsSession(this.source, this) },
+        ...App.Tools.menuItems(this.source),
         '-',
         { label: 'Highlighting', icon: 'code', submenu: Object.entries(VyttyHighlight.PROFILES).map(([k, n]) => ({ label: n, checked: this.hlProfile === k, action: () => this.setHighlight(k) })) },
         { label: 'Receive multi-exec input', icon: 'broadcast', checked: this.broadcast, action: () => this.toggleBroadcast() },
@@ -351,12 +352,17 @@
     }
 
     async close(skipConfirm) {
+      if (this.disposed || this.closing) return;
       if (this.state === 'connected' && App.settings.confirmCloseConnected && !skipConfirm) {
-        if (!(await confirmBox('Close tab', `"${this.title}" is still connected. Disconnect and close?`, { okLabel: 'Close' }))) return;
+        this.closing = true;
+        const ok = await confirmBox('Close tab', `"${this.title}" is still connected. Disconnect and close?`, { okLabel: 'Close' });
+        this.closing = false;
+        if (!ok || this.disposed) return;
       }
       this.disposed = true;
       if (this.connId) { byConn.delete(this.connId); vytty.conn.close(this.connId).catch(() => {}); }
       const idx = App.tabs.indexOf(this);
+      if (idx === -1) return;
       App.tabs.splice(idx, 1);
       this.tabEl.remove();
       this.wrap.remove();

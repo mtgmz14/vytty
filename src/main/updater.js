@@ -1,172 +1,251 @@
 'use strict';
-// Self-update from GitHub releases.
+// Updates from GitHub releases.
 //
 // Install modes:
-//   portable - Windows, Vytty-x.y.z-portable.exe (our launcher, build/portable.nsi,
-//              which starts a cached copy of the app and exits)
+//   portable - Windows, Vytty-x.y.z-portable.exe (our launcher, build/portable.nsi)
 //   folder   - Windows, unpacked Vytty-x.y.z-win-x64.zip
 //   appimage - Linux AppImage
+//   winget / store - updated by winget / the Microsoft Store: notify only
 //
-// No helper scripts: Windows lets a file that is in use be renamed, so the
-// running files are renamed to "*.vytty-old", the new ones put in their place,
-// and Vytty restarts through app.relaunch (which waits for this process to
-// exit). The leftovers are removed on the next start. VyttyData is never touched.
-const fs = require('fs');
-const os = require('os');
+// What changed in 0.10 (see docs/AUDYT-0.10.0.md):
+//   * every download is checked against SHA256SUMS.txt, whose Ed25519
+//     signature must match a key built into the app (update-keys.js);
+//   * no helper processes at all (the zip is unpacked in-process, not by tar.exe);
+//   * the portable build is not replaced in place: the new version is saved
+//     next to the old one and started; the old file is removed only after the
+//     new version has started successfully. If endpoint protection blocks the
+//     new file, the old one still works;
+//   * "Notify only" mode (Settings -> About) never downloads anything.
+// VyttyData is never touched.
+const crypto = require('crypto');
 const path = require('path');
-const { spawn } = require('child_process');
 const { app, net } = require('electron');
+const fs = (() => { try { return require('original-fs'); } catch { return require('fs'); } })();
+const { paths, portableExe } = require('./paths');
+const V = require('./update-verify');
+const KEYS = require('./update-keys');
+const { extractZip } = require('./unzip');
 
 const REPO = 'mtgmz14/vytty';
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
 const OLD = '.vytty-old';
+const STAGING = '.vytty-update';
 const CLEANUP_MARK = '.vytty-cleanup';
+const SELF_UPDATING = new Set(['portable', 'folder', 'appimage']);
 
-// Numeric compare of "1.2.3" style versions (a leading "v" is ignored).
-function newer(a, b) {
-  const pa = String(a).replace(/^v/i, '').split(/[.-]/).map((x) => parseInt(x, 10) || 0);
-  const pb = String(b).replace(/^v/i, '').split(/[.-]/).map((x) => parseInt(x, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+const UA = () => `Vytty/${app.getVersion()}`;
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function renameRetry(from, to, tries = 12) {
+  for (let i = 0; ; i++) {
+    try { fs.renameSync(from, to); return; } catch (err) {
+      if (i >= tries || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+      sleepSync(Math.min(25 * (i + 1), 200));
+    }
   }
-  return false;
 }
 
 function installMode() {
   if (!app.isPackaged) return null;
-  if (process.platform === 'win32') return process.env.PORTABLE_EXECUTABLE_FILE ? 'portable' : 'folder';
+  if (process.windowsStore) return 'store';
+  if (process.platform === 'win32') {
+    const exe = portableExe() || process.execPath;
+    if (/[\\/]Microsoft[\\/]WinGet[\\/]Packages[\\/]/i.test(exe)) return 'winget';
+    return portableExe() ? 'portable' : 'folder';
+  }
   if (process.platform === 'linux' && process.env.APPIMAGE) return 'appimage';
   return null;
 }
 
+const appDir = () => path.dirname(process.execPath);
+// The file the user starts: the portable launcher or the AppImage.
+const userFile = (mode) => (mode === 'portable' ? portableExe() : mode === 'appimage' ? process.env.APPIMAGE : process.execPath);
+
 function info() {
-  return { mode: installMode() };
+  const mode = installMode();
+  return { mode, selfUpdate: SELF_UPDATING.has(mode), signingKeys: KEYS.length };
 }
 
-const ASSETS = { portable: /-portable\.exe$/i, folder: /-win-x64\.zip$/i, appimage: /\.AppImage$/i };
+// Why this copy cannot install an update itself (shown in the update dialog).
+function manualReason(mode) {
+  if (mode === 'winget') return 'This copy was installed with winget. Update it with: winget upgrade mtgmz14.Vytty';
+  if (mode === 'store') return 'This copy is updated by the Microsoft Store.';
+  if (!mode) return 'This copy cannot update itself (it is not a packaged release build).';
+  return '';
+}
 
 let latest = null;
 let prepared = null;
 let abort = null;
 
+async function fetchJson(url) {
+  const res = await net.fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': UA() } });
+  return res;
+}
+
+async function fetchText(url, signal) {
+  const res = await net.fetch(url, { signal, headers: { 'User-Agent': UA() } });
+  if (!res.ok) throw new Error(`Download of ${url.split('/').pop()} failed (${res.status})`);
+  return res.text();
+}
+
+// The GitHub API allows 60 unauthenticated requests per hour per IP, which a
+// whole office behind one NAT can use up. The release page redirect has no
+// such limit; asset URLs follow the fixed naming scheme.
+async function releaseFromRedirect() {
+  const res = await net.fetch(`${RELEASES_URL}/latest`, { method: 'HEAD', redirect: 'follow', headers: { 'User-Agent': UA() } });
+  const m = /\/releases\/tag\/([^/?#]+)\/?$/.exec(res.url || '');
+  if (!m) throw new Error(`Could not determine the latest release (${res.status})`);
+  const tag = decodeURIComponent(m[1]);
+  const v = tag.replace(/^v/i, '');
+  const asset = (name) => ({ name, browser_download_url: `${RELEASES_URL}/download/${encodeURIComponent(tag)}/${name}`, size: 0 });
+  return {
+    tag_name: tag,
+    html_url: `${RELEASES_URL}/tag/${encodeURIComponent(tag)}`,
+    body: '',
+    assets: [...['portable', 'folder', 'appimage'].map((mode) => asset(V.assetNameFor(mode, v))), asset(V.SUMS_NAME), asset(V.SIG_NAME)],
+  };
+}
+
 async function check() {
-  const res = await net.fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': `Vytty/${app.getVersion()}` },
-  });
-  if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
-  const rel = await res.json();
+  let rel;
+  const res = await fetchJson(`https://api.github.com/repos/${REPO}/releases/latest`);
+  if (res.ok) rel = await res.json();
+  else if (res.status === 403 || res.status === 429) rel = await releaseFromRedirect();
+  else throw new Error(`GitHub returned ${res.status}`);
+
   const version = String(rel.tag_name || '').replace(/^v/i, '');
   const mode = installMode();
-  const re = ASSETS[mode];
-  const asset = re && (rel.assets || []).find((a) => re.test(a.name));
+  const assets = rel.assets || [];
+  const asset = V.pickAsset(assets, mode);
+  const find = (name) => assets.find((a) => a.name === name);
+  const sums = find(V.SUMS_NAME);
+  const sig = find(V.SIG_NAME);
   latest = {
-    available: newer(version, app.getVersion()),
+    available: V.newer(version, app.getVersion()),
     current: app.getVersion(),
     version,
     notes: rel.body || '',
     page: rel.html_url || RELEASES_URL,
     mode,
-    asset: asset ? { name: asset.name, url: asset.browser_download_url, size: asset.size } : null,
+    asset: asset ? { name: asset.name, url: asset.browser_download_url, size: asset.size || 0 } : null,
+    sums: sums ? sums.browser_download_url : null,
+    sig: sig ? sig.browser_download_url : null,
   };
-  latest.canInstall = !!(latest.asset && mode);
+  let reason = manualReason(mode);
+  if (!reason && !latest.asset) reason = 'The release has no download for this kind of installation.';
+  if (!reason && !KEYS.length) reason = 'This build cannot verify updates.';
+  if (!reason && (!latest.sums || !latest.sig)) reason = 'The release is not signed for automatic updates. Download it from GitHub instead.';
+  latest.canInstall = !reason;
+  latest.reason = reason;
   return latest;
-}
-
-function run(cmd, args) {
-  return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { windowsHide: true, stdio: 'ignore' });
-    p.on('error', reject);
-    p.on('close', resolve);
-  });
 }
 
 // The folder that holds Vytty.exe inside an extracted zip.
 function findAppRoot(dir) {
-  if (fs.existsSync(path.join(dir, 'Vytty.exe'))) return dir;
+  const exe = process.platform === 'win32' ? 'Vytty.exe' : 'vytty';
+  if (fs.existsSync(path.join(dir, exe))) return dir;
   for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (d.isDirectory() && fs.existsSync(path.join(dir, d.name, 'Vytty.exe'))) return path.join(dir, d.name);
+    if (d.isDirectory() && fs.existsSync(path.join(dir, d.name, exe))) return path.join(dir, d.name);
   }
-  throw new Error('Vytty.exe not found in the downloaded archive');
-}
-
-// Versioned file names follow the release; a renamed file (e.g. "Vytty.exe"
-// used by shortcuts) is replaced in place.
-function destinationFor(target, assetName) {
-  const versioned = /^Vytty-\d+\.\d+\.\d+(-portable\.exe|\.AppImage)$/i.test(path.basename(target));
-  return versioned ? path.join(path.dirname(target), assetName) : target;
+  throw new Error(`${exe} not found in the downloaded archive`);
 }
 
 async function download(onProgress) {
   if (!latest || !latest.canInstall) throw new Error('No update to download');
-  const { mode } = latest;
-  const target = mode === 'portable' ? process.env.PORTABLE_EXECUTABLE_FILE : mode === 'appimage' ? process.env.APPIMAGE : null;
-  const work = target ? path.dirname(target) : path.join(os.tmpdir(), `vytty-update-${latest.version}`);
-  fs.mkdirSync(work, { recursive: true });
-  const file = path.join(work, `${latest.asset.name}.download`);
+  const { mode, version } = latest;
   const ctrl = new AbortController();
   abort = () => ctrl.abort();
   let out = null;
+  let part = null;
   try {
-    const res = await net.fetch(latest.asset.url, { signal: ctrl.signal, headers: { 'User-Agent': `Vytty/${app.getVersion()}` } });
+    // 1. The signed checksum list decides what we accept.
+    const [sumsText, signature] = await Promise.all([fetchText(latest.sums, ctrl.signal), fetchText(latest.sig, ctrl.signal)]);
+    const expected = V.expectedHash({ sumsText, signature, keys: KEYS, assetName: latest.asset.name, version });
+
+    // 2. Download next to the target (same volume, so the final step is a rename).
+    const target = userFile(mode);
+    const dir = mode === 'folder' ? path.join(appDir(), STAGING) : path.dirname(target);
+    fs.mkdirSync(dir, { recursive: true });
+    part = path.join(dir, `${latest.asset.name}.download`);
+    const res = await net.fetch(latest.asset.url, { signal: ctrl.signal, headers: { 'User-Agent': UA() } });
     if (!res.ok || !res.body) throw new Error(`Download failed (${res.status})`);
     const total = Number(res.headers.get('content-length')) || latest.asset.size || 0;
-    out = fs.createWriteStream(file);
+    const hash = crypto.createHash('sha256');
+    out = fs.createWriteStream(part);
     const reader = res.body.getReader();
     let got = 0;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      got += value.length;
-      if (!out.write(Buffer.from(value))) await new Promise((r) => out.once('drain', r));
+      const buf = Buffer.from(value);
+      got += buf.length;
+      hash.update(buf);
+      if (!out.write(buf)) await new Promise((r) => out.once('drain', r));
       onProgress(got, total, 'download');
     }
     await new Promise((resolve, reject) => { out.on('error', reject); out.end(resolve); });
     out = null;
-    if (latest.asset.size && fs.statSync(file).size !== latest.asset.size) throw new Error('Downloaded file is incomplete');
+
+    // 3. Must be exactly the file the release signed.
+    onProgress(got, total, 'verify');
+    if (hash.digest('hex') !== expected) throw new Error('The downloaded file does not match the signed checksum - not installed');
+
+    if (mode === 'folder') {
+      // Unpack now, so nothing can fail after the swap starts.
+      onProgress(0, 0, 'extract');
+      const staging = path.join(dir, version);
+      fs.rmSync(staging, { recursive: true, force: true });
+      await extractZip(part, staging);
+      fs.rmSync(part, { force: true });
+      prepared = { mode, version, root: findAppRoot(staging), staging: dir };
+      return version;
+    }
+    if (mode === 'appimage') fs.chmodSync(part, 0o755);
+    // A versioned name (Vytty-0.9.1-portable.exe) gets the new version's name
+    // next to it; a renamed copy ("Vytty.exe" used by shortcuts) keeps its name.
+    const sideBySide = V.OLD_BUILD.test(path.basename(target));
+    const dest = sideBySide ? path.join(dir, latest.asset.name) : `${target}.new`;
+    fs.rmSync(dest, { force: true });
+    renameRetry(part, dest);
+    prepared = { mode, version, file: dest, target, sideBySide };
+    return version;
   } catch (err) {
     if (out) out.destroy();
-    try { fs.rmSync(file, { force: true }); } catch { /* ignore */ }
+    if (part) { try { fs.rmSync(part, { force: true }); } catch { /* ignore */ } }
     if (ctrl.signal.aborted) throw new Error('Download cancelled');
-    if (err && err.code === 'EPERM') throw new Error(`No write access to ${work}`);
+    if (err && (err.code === 'EPERM' || err.code === 'EACCES')) throw new Error(`No write access to ${path.dirname(part || userFile(mode) || '')}`);
     throw err;
   } finally {
     abort = null;
   }
-
-  if (mode !== 'folder') {
-    if (mode === 'appimage') fs.chmodSync(file, 0o755);
-    prepared = { mode, file, target, dest: destinationFor(target, latest.asset.name) };
-    return latest.version;
-  }
-  // Folder version: unpack the zip now, so nothing can fail after the swap starts.
-  onProgress(0, 0, 'extract');
-  const staging = path.join(work, 'files');
-  fs.rmSync(staging, { recursive: true, force: true });
-  fs.mkdirSync(staging, { recursive: true });
-  const code = await run(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', file, '-C', staging]);
-  if (code !== 0) throw new Error(`Unpacking the update failed (tar ${code})`);
-  prepared = { mode, root: findAppRoot(staging), work };
-  return latest.version;
 }
 
 function cancel() {
   if (abort) abort();
 }
 
-// Move `from` aside (renaming works even while it is running) and put `src`
-// there. Returns an undo function.
-function replaceFile(dst, src, copy) {
+function writeState(state) {
+  try { fs.writeFileSync(paths.updateState, JSON.stringify({ ...state, from_version: app.getVersion(), at: new Date().toISOString() }, null, 2)); } catch { /* best effort */ }
+}
+
+function readState() {
+  try { return JSON.parse(fs.readFileSync(paths.updateState, 'utf8')); } catch { return null; }
+}
+
+// Move `dst` aside (renaming works even while it is running) and move `src`
+// into its place. Returns an undo function.
+function replaceFile(dst, src) {
   const old = dst + OLD;
   let moved = false;
   if (fs.existsSync(dst)) {
     fs.rmSync(old, { force: true });
-    fs.renameSync(dst, old);
+    renameRetry(dst, old);
     moved = true;
   }
-  if (copy) fs.copyFileSync(src, dst); else fs.renameSync(src, dst);
+  renameRetry(src, dst);
   return () => {
     try { fs.rmSync(dst, { force: true }); } catch { /* ignore */ }
-    if (moved) fs.renameSync(old, dst);
+    if (moved) renameRetry(old, dst);
   };
 }
 
@@ -175,86 +254,99 @@ function listFiles(root, rel = '') {
   for (const d of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
     const r = path.join(rel, d.name);
     if (!d.isDirectory()) out.push(r);
-    else if (r !== 'VyttyData') out.push(...listFiles(root, r)); // user data: never listed
+    else if (r !== 'VyttyData' && r !== STAGING) out.push(...listFiles(root, r)); // user data: never listed
   }
   return out;
 }
 
-// Swap the files and arrange the restart; the caller then quits the app.
+// Arrange the switch to the new version; the caller then quits the app.
 function install() {
   if (!prepared) throw new Error('Nothing prepared');
   const p = prepared;
   if (p.mode === 'portable' || p.mode === 'appimage') {
-    const undo = [];
+    if (p.sideBySide) {
+      writeState({ mode: p.mode, from: p.target, to: p.file, version: p.version });
+      app.relaunch({ execPath: p.file, args: [] });
+      return true;
+    }
+    const old = p.target + OLD;
+    fs.rmSync(old, { force: true });
+    renameRetry(p.target, old);
     try {
-      if (p.dest !== p.target && fs.existsSync(p.target)) {
-        // New versioned name: the old file goes aside, removed on next start.
-        const old = p.target + OLD;
-        fs.rmSync(old, { force: true });
-        fs.renameSync(p.target, old);
-        undo.push(() => fs.renameSync(old, p.target));
-      }
-      undo.push(replaceFile(p.dest, p.file, false));
+      renameRetry(p.file, p.target);
     } catch (err) {
-      for (const u of undo.reverse()) { try { u(); } catch { /* ignore */ } }
+      try { renameRetry(old, p.target); } catch { /* ignore */ }
       throw new Error(`Could not replace ${p.target}: ${err.message}`);
     }
-    app.relaunch({ execPath: p.dest, args: [] });
+    writeState({ mode: p.mode, from: old, to: p.target, version: p.version });
+    app.relaunch({ execPath: p.target, args: [] });
     return true;
   }
 
-  // Folder version. process.noAsar: Electron would otherwise treat app.asar
-  // as a folder and refuse to rename or copy it as a file.
-  const appDir = path.dirname(process.execPath);
-  const noAsar = process.noAsar;
-  process.noAsar = true;
+  // Folder version: files in use can be renamed but not overwritten, so each
+  // one is moved aside and the new one moved in from the staging folder.
+  const dir = appDir();
   const undo = [];
   try {
     for (const rel of listFiles(p.root)) {
-      const dst = path.join(appDir, rel);
+      const dst = path.join(dir, rel);
       fs.mkdirSync(path.dirname(dst), { recursive: true });
-      undo.push(replaceFile(dst, path.join(p.root, rel), true));
+      undo.push(replaceFile(dst, path.join(p.root, rel)));
     }
-    fs.writeFileSync(path.join(appDir, CLEANUP_MARK), '');
+    fs.writeFileSync(path.join(dir, CLEANUP_MARK), p.version);
   } catch (err) {
     for (const u of undo.reverse()) { try { u(); } catch { /* ignore */ } }
-    throw new Error(`Could not update the files in ${appDir}: ${err.message}`);
-  } finally {
-    process.noAsar = noAsar;
+    throw new Error(`Could not update the files in ${dir}: ${err.message}`);
   }
-  try { fs.rmSync(p.work, { recursive: true, force: true }); } catch { /* ignore */ }
-  app.relaunch({ execPath: path.join(appDir, 'Vytty.exe'), args: [] });
+  writeState({ mode: 'folder', folder: dir, version: p.version });
+  app.relaunch({ execPath: path.join(dir, path.basename(process.execPath)), args: [] });
   return true;
 }
 
-// On start: remove what the last update set aside.
+const DAY = 24 * 60 * 60 * 1000;
+
+// Called a few seconds after a successful start: remove what the previous
+// version left behind. Only files that look like ours are ever deleted.
 function cleanup() {
   const mode = installMode();
   try {
+    const state = readState();
+    if (state && (mode === 'portable' || mode === 'appimage')) {
+      const current = userFile(mode);
+      const from = state.from ? path.resolve(state.from) : null;
+      const sameDir = from && current && path.dirname(from).toLowerCase() === path.dirname(path.resolve(current)).toLowerCase();
+      const ours = from && (V.OLD_BUILD.test(path.basename(from)) || from.endsWith(OLD));
+      // Started as the new version: the old file is no longer needed.
+      if (from && sameDir && ours && from.toLowerCase() !== path.resolve(current).toLowerCase() && state.version === app.getVersion()) {
+        fs.rmSync(from, { force: true });
+      }
+      fs.rmSync(paths.updateState, { force: true });
+    } else if (state && mode === 'folder' && state.version === app.getVersion()) {
+      fs.rmSync(paths.updateState, { force: true });
+    }
+
     if (mode === 'portable' || mode === 'appimage') {
-      const file = mode === 'portable' ? process.env.PORTABLE_EXECUTABLE_FILE : process.env.APPIMAGE;
-      const dir = path.dirname(file);
-      // Only files set aside by an update. Not "*.download": a download may be
-      // running right now (the update prompt can come up before this runs).
+      const dir = path.dirname(userFile(mode));
       for (const name of fs.readdirSync(dir)) {
-        if (name.endsWith(OLD)) fs.rmSync(path.join(dir, name), { force: true });
+        const full = path.join(dir, name);
+        if (name.endsWith(OLD)) fs.rmSync(full, { force: true });
+        // An abandoned download (not one running right now: those are younger).
+        else if (name.endsWith('.download') && /^Vytty-/i.test(name)) {
+          try { if (Date.now() - fs.statSync(full).mtimeMs > DAY) fs.rmSync(full, { force: true }); } catch { /* ignore */ }
+        }
       }
     } else if (mode === 'folder') {
-      const appDir = path.dirname(process.execPath);
-      const mark = path.join(appDir, CLEANUP_MARK);
-      if (!fs.existsSync(mark)) return;
-      const noAsar = process.noAsar;
-      process.noAsar = true;
-      try {
-        for (const rel of listFiles(appDir)) {
-          if (rel.endsWith(OLD)) fs.rmSync(path.join(appDir, rel), { force: true });
-        }
-      } finally {
-        process.noAsar = noAsar;
+      const dir = appDir();
+      const mark = path.join(dir, CLEANUP_MARK);
+      if (fs.existsSync(mark)) {
+        for (const rel of listFiles(dir)) if (rel.endsWith(OLD)) fs.rmSync(path.join(dir, rel), { force: true });
+        fs.rmSync(path.join(dir, STAGING), { recursive: true, force: true });
+        fs.rmSync(mark, { force: true });
+      } else if (fs.existsSync(path.join(dir, STAGING)) && !abort) {
+        fs.rmSync(path.join(dir, STAGING), { recursive: true, force: true });
       }
-      fs.rmSync(mark, { force: true });
     }
   } catch { /* try again next time */ }
 }
 
-module.exports = { check, download, cancel, install, info, cleanup, RELEASES_URL };
+module.exports = { check, download, cancel, install, info, cleanup, installMode, RELEASES_URL, _test: { findAppRoot, listFiles, manualReason } };
