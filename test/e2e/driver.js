@@ -11,6 +11,21 @@ const errors = [];
 let step = 'start';
 const log = (m) => process.stdout.write(`[e2e] ${m}\n`);
 
+// A fake NetBox API: two devices, the second one gone on the second sync.
+let netboxCalls = 0;
+function netboxServer() {
+  const http = require('http');
+  const dev = (id, site) => ({ id, name: `nb-sw${id}`, display_url: `http://nb/dcim/devices/${id}/`, primary_ip: { address: `10.9.0.${id}/24` }, site: { name: site }, role: { name: 'Access' }, platform: { name: 'Cisco IOS', slug: 'ios' } });
+  const srv = http.createServer((req, res) => {
+    if (req.headers.authorization !== 'Token e2e-token') { res.writeHead(403); res.end('{}'); return; }
+    netboxCalls++;
+    const results = netboxCalls === 1 ? [dev(1, 'WAW1'), dev(2, 'KRK1')] : [dev(1, 'WAW2')];
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ count: results.length, next: null, results }));
+  });
+  return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+}
+
 function sshServer() {
   const srv = new Server({ hostKeys: [utils.generateKeyPairSync('ed25519').private] }, (client) => {
     client.on('error', () => {});
@@ -44,6 +59,7 @@ app.on('browser-window-created', (_e, win) => {
     };
     const shot = async (name) => fs.writeFileSync(path.join(OUT, `${name}.png`), (await win.webContents.capturePage()).toPNG());
     const srv = await sshServer();
+    const nb = await netboxServer();
     let code = 0;
     try {
       win.setSize(1280, 800);
@@ -85,6 +101,47 @@ app.on('browser-window-created', (_e, win) => {
       await wait(300);
       await shot('03-ssh');
 
+      step = 'import merge';
+      const merged = await ev(`(() => {
+        const folders = [{ id: 'a', name: 'Imported', parentId: null }, { id: 'b', name: 'Core', parentId: 'a' }];
+        const sessions = [{ id: 'j1', name: 'jump', protocol: 'ssh', host: '10.1.0.1', port: 22, folderId: 'a' },
+          { id: 'x1', name: 'imp-sw1', protocol: 'ssh', host: '10.1.0.2', port: 22, folderId: 'b', jumpId: 'j1' }];
+        const first = App.Integrations.mergeIntoTree(folders, sessions);
+        const second = App.Integrations.mergeIntoTree(folders, sessions);
+        const sw = App.tree.sessions.find((x) => x.name === 'imp-sw1');
+        const jump = App.tree.sessions.find((x) => x.name === 'jump');
+        return JSON.stringify({ a1: first.added, a2: second.added, s2: second.skipped, jumpOk: sw.jumpId === jump.id, folders: App.tree.folders.filter((f) => f.name === 'Imported').length, path: App.folderPath(sw.folderId) });
+      })()`);
+      assert.deepStrictEqual(JSON.parse(merged), { a1: 2, a2: 0, s2: 2, jumpOk: true, folders: 1, path: 'Imported / Core' });
+      const menu = await ev(`JSON.stringify(App.Tools.menuItems(App.session('s-ssh'))[0].submenu.filter((x) => x && x.label).map((x) => x.label))`);
+      assert.ok(JSON.parse(menu).includes('Ping'), menu);
+
+      step = 'netbox';
+      await ev(`(async () => {
+        await vytty.vault.set('integration:netbox', { token: 'e2e-token' });
+        Object.assign(App.settings.integrations.netbox, { url: 'http://127.0.0.1:${nb.address().port}', username: 'admin' });
+        await App.saveSettings();
+        window.__nb1 = await App.Integrations.netboxSync();
+      })()`);
+      const nb1 = JSON.parse(await ev(`JSON.stringify({ r: window.__nb1, s: App.tree.sessions.filter((x) => x.source && x.source.type === 'netbox').map((x) => [x.name, x.host, App.folderPath(x.folderId), x.highlight, x.username]) })`));
+      assert.deepStrictEqual(nb1.r, { added: 2, updated: 0, missing: 0 });
+      assert.deepStrictEqual(nb1.s, [['nb-sw1', '10.9.0.1', 'NetBox / WAW1 / Access', 'cisco-ios', 'admin'], ['nb-sw2', '10.9.0.2', 'NetBox / KRK1 / Access', 'cisco-ios', 'admin']]);
+      // Second sync: sw1 moved to another site, sw2 deleted in NetBox -> asked, keep it.
+      await ev(`(async () => {
+        const p = App.Integrations.netboxSync();
+        for (let i = 0; i < 50 && !document.querySelector('.modal'); i++) await new Promise((r) => setTimeout(r, 100));
+        document.querySelector('.modal .btn:not(.danger):not(.primary)').click();
+        window.__nb2 = await p;
+      })()`);
+      const nb2 = JSON.parse(await ev(`JSON.stringify({ r: window.__nb2, sw1: App.folderPath(App.tree.sessions.find((x) => x.name === 'nb-sw1').folderId), n: App.tree.sessions.filter((x) => x.source && x.source.type === 'netbox').length })`));
+      assert.deepStrictEqual(nb2, { r: { added: 0, updated: 1, missing: 1 }, sw1: 'NetBox / WAW2 / Access', n: 2 });
+
+      step = 'links';
+      const before = await ev('App.tabs.length');
+      await ev(`App.Integrations.openUrls([{ protocol: 'ssh', host: '127.0.0.1', port: ${srv.address().port}, username: 'admin', name: 'x' }])`);
+      await until(`App.tabs.length === ${before} + 1 && App.active.source.id === 's-ssh'`, 'the link to open the saved session');
+      await ev(`App.active.close(true)`);
+
       step = 'styles';
       for (const [style, theme] of [['compact', 'paper'], ['rounded', 'vytty-dark'], ['minimal', 'graphite']]) {
         await ev(`(async () => { App.settings.theme = '${theme}'; await App.setStyle('${style}'); })()`);
@@ -113,6 +170,7 @@ app.on('browser-window-created', (_e, win) => {
       try { await shot('failure'); } catch { /* ignore */ }
     }
     srv.close();
+    nb.close();
     app.exit(code);
   });
 });
