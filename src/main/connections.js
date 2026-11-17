@@ -81,6 +81,8 @@ class ConnectionManager {
       rows: rows || 24,
       decoder: new StringDecoder('utf8'),
       log: new SessionLog(logName || session.name || session.host || 'session', describe(session), logEnabled !== false, fallbackHost(session)),
+      outBuf: '',
+      flushQueued: false,
       closed: false,
       write: () => {},
       resize: () => {},
@@ -113,9 +115,24 @@ class ConnectionManager {
     const text = typeof chunk === 'string' ? chunk : conn.decoder.write(chunk);
     if (!text) return;
     conn.log.write(text);
-    this.send('conn:data', conn.id, text);
+    // Output that arrives in one burst (ssh2 parses several packets per socket
+    // read) goes to the renderer as one IPC message. setImmediate runs right
+    // after the current I/O callbacks, so typing echo is not delayed.
+    conn.outBuf += text;
+    if (!conn.flushQueued) {
+      conn.flushQueued = true;
+      setImmediate(() => this.flushOut(conn));
+    }
     if (conn.autoLogin) this.autoLoginStep(conn, text);
     if (conn.startup) conn.startup.onOutput();
+  }
+
+  flushOut(conn) {
+    conn.flushQueued = false;
+    if (!conn.outBuf) return;
+    const text = conn.outBuf;
+    conn.outBuf = '';
+    this.send('conn:data', conn.id, text);
   }
 
   fail(conn, err) {
@@ -125,11 +142,13 @@ class ConnectionManager {
 
   finish(conn, reason) {
     if (conn.closed) return;
+    this.flushOut(conn);
     conn.closed = true;
     conn.log.close(reason);
     for (const s of conn.servers) { try { s.close(); } catch { /* ignore */ } }
     try { conn.destroy(); } catch { /* ignore */ }
     this.conns.delete(conn.id);
+    this.dropDragCache(conn.id);
     this.send('conn:closed', conn.id, reason || 'Connection closed');
   }
 
@@ -227,8 +246,7 @@ class ConnectionManager {
     // Imported sessions (e.g. from MobaXterm) may point at keys that are not on
     // this machine: skip the key and fall back to password authentication.
     if (!fs.existsSync(session.keyPath)) {
-      if (warn) warn(`[33m[Vytty] Private key not found: ${session.keyPath} - trying password[0m
-`);
+      if (warn) warn(`\x1b[33m[Vytty] Private key not found: ${session.keyPath} - trying password\x1b[0m\r\n`);
       return null;
     }
     const raw = fs.readFileSync(session.keyPath);
@@ -381,16 +399,30 @@ class ConnectionManager {
     const { session, secret } = conn;
     let sock;
     let jumpClient = null;
-    if (session.jump && session.jump.session) {
-      const js = session.jump.session;
-      this.emit(conn, `\x1b[2mVia jump host ${js.host}...\x1b[0m\r\n`);
-      jumpClient = await this.connectClient(js, this.secretFor(js), undefined);
-      sock = await new Promise((resolve, reject) => {
-        jumpClient.forwardOut('127.0.0.1', 0, session.host, Number(session.port) || 22, (err, stream) => (err ? reject(err) : resolve(stream)));
-      });
+    let client = null;
+    // Closing the tab while we are still connecting must also drop whatever
+    // is already open (the jump host, the finished handshake...).
+    const endAll = () => {
+      try { if (client) client.end(); } catch { /* ignore */ }
+      try { if (jumpClient) jumpClient.end(); } catch { /* ignore */ }
+    };
+    conn.destroy = endAll;
+    try {
+      if (session.jump && session.jump.session) {
+        const js = session.jump.session;
+        this.emit(conn, `\x1b[2mVia jump host ${js.host}...\x1b[0m\r\n`);
+        jumpClient = await this.connectClient(js, this.secretFor(js), undefined);
+        if (conn.closed) { endAll(); return; }
+        sock = await new Promise((resolve, reject) => {
+          jumpClient.forwardOut('127.0.0.1', 0, session.host, Number(session.port) || 22, (err, stream) => (err ? reject(err) : resolve(stream)));
+        });
+      }
+      client = await this.connectClient(session, secret, sock, (msg) => this.emit(conn, msg.replace(/\r?\n/g, '\r\n')));
+    } catch (err) {
+      endAll();
+      throw err;
     }
-    const client = await this.connectClient(session, secret, sock, (msg) => this.emit(conn, msg.replace(/\r?\n/g, '\r\n')));
-    if (conn.closed) { client.end(); if (jumpClient) jumpClient.end(); return; }
+    if (conn.closed) { endAll(); return; }
     conn.client = client;
     client.on('close', () => this.finish(conn, 'Connection closed'));
     client.on('error', (err) => this.fail(conn, err));
@@ -398,10 +430,10 @@ class ConnectionManager {
     const stream = await new Promise((resolve, reject) => {
       client.shell({ term: 'xterm-256color', cols: conn.cols, rows: conn.rows }, (err, s) => (err ? reject(err) : resolve(s)));
     });
+    if (conn.closed) { endAll(); return; }
     conn.stream = stream;
     conn.write = (d) => stream.write(d);
     conn.resize = (c, r) => stream.setWindow(r, c, 0, 0);
-    conn.destroy = () => { client.end(); if (jumpClient) jumpClient.end(); };
     stream.on('data', (d) => this.emit(conn, d));
     stream.stderr.on('data', (d) => this.emit(conn, d));
     stream.on('close', () => this.finish(conn, 'Session ended'));
@@ -581,7 +613,7 @@ class ConnectionManager {
     this.dragCache = this.dragCache || new Map();
     const key = `${id}|${items.map((i) => `${i.path}:${i.size}:${i.mtime}`).join('|')}`;
     if (!this.dragCache.has(key)) {
-      const dir = path.join(os.tmpdir(), 'vytty-drag', crypto.randomBytes(6).toString('hex'));
+      const dir = path.join(os.tmpdir(), 'vytty-drag', `${id.replace(/[^\w-]/g, '').slice(0, 40)}-${crypto.randomBytes(6).toString('hex')}`);
       const p = this.sftp(id)
         .then((sftp) => {
           const call = (fn, ...a) => new Promise((resolve, reject) => sftp[fn](...a, (err, res) => (err ? reject(err) : resolve(res))));
@@ -591,6 +623,22 @@ class ConnectionManager {
       this.dragCache.set(key, p);
     }
     return this.dragCache.get(key);
+  }
+
+  // A closed connection's drag copies are no longer needed: forget them and
+  // remove their temp folders (they can be large).
+  dropDragCache(id) {
+    if (!this.dragCache) return;
+    for (const key of [...this.dragCache.keys()]) {
+      if (key.startsWith(`${id}|`)) this.dragCache.delete(key);
+    }
+    const prefix = `${String(id).replace(/[^\w-]/g, '').slice(0, 40)}-`;
+    const root = path.join(os.tmpdir(), 'vytty-drag');
+    let dirs = [];
+    try { dirs = fs.readdirSync(root); } catch { return; }
+    for (const d of dirs) {
+      if (d.startsWith(prefix)) fs.rm(path.join(root, d), { recursive: true, force: true }, () => {});
+    }
   }
 
   static cleanupDragTemp() {
@@ -603,7 +651,15 @@ class ConnectionManager {
     const { session } = conn;
     const IAC = 255, DONT = 254, DO = 253, WONT = 252, WILL = 251, SB = 250, SE = 240;
     const ECHO = 1, SGA = 3, TTYPE = 24, NAWS = 31;
-    const sock = net.connect({ host: session.host, port: Number(session.port) || 23 });
+    const port = Number(session.port) || 23;
+    const sock = net.connect({ host: session.host, port });
+    // Without this an unreachable device keeps the tab "connecting" for the
+    // OS TCP timeout (21 s on Windows, minutes on Linux).
+    const timeoutMs = (this.getSettings().ssh || {}).readyTimeout || 20000;
+    let connected = false;
+    sock.setTimeout(timeoutMs, () => {
+      if (!connected) sock.destroy(new Error(`Timed out connecting to ${session.host}:${port}`));
+    });
     let naws = false;
     let state = 0; // 0 data, 1 IAC, 2 option verb, 3 SB, 4 SB-IAC
     let verb = 0;
@@ -617,6 +673,8 @@ class ConnectionManager {
 
     sock.setNoDelay(true);
     sock.on('connect', () => {
+      connected = true;
+      sock.setTimeout(0);
       this.status(conn.id, 'connected', describe(session));
       this.armAutoLogin(conn);
       this.armStartup(conn);

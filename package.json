@@ -30,7 +30,7 @@
     "icon": "electron scripts/make-icon.js"
   },
   "dependencies": {
-    "@lydell/node-pty": "^1.2.0-beta.15",
+    "@lydell/node-pty": "^1.2.0-beta.18",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-unicode11": "^0.9.0",
@@ -40,8 +40,8 @@
     "ssh2": "^1.17.0"
   },
   "devDependencies": {
-    "electron": "^44.4.5",
-    "electron-builder": "^26.15.3"
+    "electron": "^44.11.3",
+    "electron-builder": "^26.18.1"
   },
   "build": {
     "appId": "io.github.vytty",

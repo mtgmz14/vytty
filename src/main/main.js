@@ -202,8 +202,10 @@ ipcMain.on('sftp:startDrag', async (e, id, items, deferred) => {
     return;
   }
   const since = Date.now();
+  // Watch the user's folders before the drag starts, so the drop is seen.
+  const watch = dragout.watchDrop(items[0], since);
   e.sender.startDrag({ file: ph.files[0], files: ph.files, icon: getDragIcon() });
-  const dest = await dragout.locateDrop(items[0], since);
+  const dest = await watch.result();
   try { fs.rmSync(ph.dir, { recursive: true, force: true }); } catch { /* ignore */ }
   if (!dest) {
     send('sftp:dragResult', { ok: false, unknown: true, items });
