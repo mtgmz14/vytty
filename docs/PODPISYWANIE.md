@@ -111,13 +111,20 @@ przed ich opublikowaniem albo sięgnąć po nieoficjalne narzędzia automatyzuj�
 
 ## Jak działa weryfikacja aktualizacji (0.10.0)
 
-1. Workflow wydania liczy `SHA256SUMS.txt` dla wszystkich plików i podpisuje go kluczem Ed25519 z sekretu
-   `VYTTY_UPDATE_SIGNING_KEY`. Klucz publiczny jest wkompilowany w aplikację (`src/main/update-keys.js`).
+1. Workflow wydania liczy `SHA256SUMS.txt` dla wszystkich plików. Listę podpisuje klucz Ed25519, którego część
+   publiczna jest wkompilowana w aplikację (`src/main/update-keys.js`). Podpis powstaje na jeden z dwóch sposobów:
+   - **klucz offline (domyślnie)**: bez sekretu `VYTTY_UPDATE_SIGNING_KEY` workflow zostawia wydanie jako szkic
+     (*draft*), niewidoczny dla użytkowników i dla aktualizatora. Na komputerze z kluczem uruchamiasz
+     `npm run release:sign -- v0.10.0`. Skrypt pobiera pliki szkicu i sprawdza ich sumy oraz atestację pochodzenia
+     (zbudował je workflow wydania z tego tagu i z tego commita). Potem podpisuje listę, wysyła sam podpis
+     (`SHA256SUMS.txt.sig`) i publikuje wydanie. Klucz prywatny nie opuszcza komputera.
+   - **klucz w CI**: gdy dodasz sekret `VYTTY_UPDATE_SIGNING_KEY`, workflow podpisuje i publikuje wydanie sam.
 2. Vytty pobiera najpierw listę i podpis, sprawdza podpis, a potem pobiera plik i liczy jego SHA-256. Instaluje go
    tylko wtedy, gdy wszystko się zgadza. Nazwa pliku zawiera wersję, więc starej, poprawnie podpisanej listy nie da
    się podsunąć jako nowszej wersji.
 3. Bez podpisu, z błędnym podpisem albo z niezgodnym skrótem Vytty odmawia instalacji i proponuje stronę pobierania.
 
-Klucz prywatny jest w sekretach GitHuba, a jego kopia zapasowa poza repozytorium. Zabezpiecz konto GitHub (2FA,
-najlepiej klucz sprzętowy), bo kto przejmie konto, może uruchomić workflow wydania. Dodatkowo warto włączyć regułę
-(*ruleset*), która pozwala tworzyć tagi `v*` tylko Tobie.
+Klucz prywatny leży w `~/.config/vytty-release/update-signing-key.pem` (prawa tylko dla właściciela). Trzymaj jego
+kopię w menedżerze haseł: bez klucza żadne nowe wydanie nie zainstaluje się samo w Vytty 0.10+. Przy kluczu offline
+samo przejęcie konta GitHub nie wystarczy, żeby Vytty zainstalowało komuś podrzuconą wersję. Mimo to zabezpiecz
+konto (2FA, najlepiej klucz sprzętowy) i włącz regułę (*ruleset*), która pozwala tworzyć tagi `v*` tylko Tobie.

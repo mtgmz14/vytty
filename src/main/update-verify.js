@@ -3,8 +3,9 @@
 //
 // Every release carries SHA256SUMS.txt (plain `sha256sum` format, so it can
 // also be checked by hand) and SHA256SUMS.txt.sig: an Ed25519 signature of the
-// exact bytes of SHA256SUMS.txt, made in CI with a key that only the release
-// workflow has. The public half is built into Vytty (update-keys.js). An update
+// exact bytes of SHA256SUMS.txt, made with the release key - kept offline by
+// the maintainer (scripts/sign-release.js) or as the release workflow's secret.
+// The public half is built into Vytty (update-keys.js). An update
 // is installed only when the signature is valid AND the downloaded file has the
 // hash listed for its name - a file swapped on the download server, a
 // corrupted download or a tampering proxy is refused.

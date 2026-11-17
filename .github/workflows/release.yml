@@ -13,7 +13,11 @@ name: Build & release
 #   Azure Artifact Signing: variables AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT,
 #     AZURE_SIGNING_PROFILE, AZURE_SIGNING_PUBLISHER; secrets AZURE_TENANT_ID,
 #     AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
-# Update signing (required for releases): secret VYTTY_UPDATE_SIGNING_KEY.
+# Update signing: by default the key is kept offline. The release then stays a
+# draft until `node scripts/sign-release.js <tag>`, run where the key is kept,
+# has checked the files and their provenance, signed SHA256SUMS.txt and
+# published it. With the secret VYTTY_UPDATE_SIGNING_KEY the workflow signs and
+# publishes on its own.
 
 on:
   push:
@@ -205,17 +209,43 @@ jobs:
           path: release
           merge-multiple: true
       - name: Checksums and update signature
+        id: sums
         env:
           VYTTY_UPDATE_SIGNING_KEY: ${{ secrets.VYTTY_UPDATE_SIGNING_KEY }}
-        run: node scripts/checksums.js release --require-signature
+        run: |
+          if [ -n "$VYTTY_UPDATE_SIGNING_KEY" ]; then
+            node scripts/checksums.js release --require-signature
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/checksums.js release
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build provenance (gh attestation verify <file> --repo ${{ github.repository }})
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: release/Vytty-*
-      - name: Publish the release
+      - name: Publish the release (a draft while the update key is offline)
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ steps.sums.outputs.signed }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           node scripts/release-notes.js "$version" > notes.md
-          gh release create "$GITHUB_REF_NAME" release/* --title "Vytty $version" --notes-file notes.md --verify-tag
+          if [ "$SIGNED" = true ]; then
+            gh release create "$GITHUB_REF_NAME" release/* --title "Vytty $version" --notes-file notes.md --verify-tag
+            exit 0
+          fi
+          # Not visible to users or to the in-app updater until it is published.
+          gh release create "$GITHUB_REF_NAME" release/* --title "Vytty $version" --notes-file notes.md --verify-tag --draft
+          echo "::notice title=Draft release::Sign and publish it where the update key is kept: node scripts/sign-release.js $GITHUB_REF_NAME"
+          {
+            echo '### Draft release, waiting for the update signature'
+            echo
+            echo 'The update signing key is kept offline. On the computer that holds it run:'
+            echo
+            echo '```'
+            echo "node scripts/sign-release.js $GITHUB_REF_NAME"
+            echo '```'
+            echo
+            echo 'It checks every file against SHA256SUMS.txt and its build provenance, signs the list and publishes the release.'
+          } >> "$GITHUB_STEP_SUMMARY"
