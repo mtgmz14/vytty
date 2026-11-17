@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VanDyke version="3.0">
+  <key name="Sessions">
+    <key name="Default">
+      <string name="Protocol Name">SSH2</string>
+    </key>
+    <key name="Datacenter &amp; Lab">
+      <key name="core-sw01">
+        <string name="Hostname">10.0.0.1</string>
+        <dword name="[SSH2] Port">2222</dword>
+        <string name="Protocol Name">SSH2</string>
+        <string name="Username">admin</string>
+        <string name="Identity Filename V2">C:\keys\id_ed25519::rawkey</string>
+        <string name="Firewall Name">Session:bastion</string>
+      </key>
+      <key name="Access">
+        <key name="sw-telnet">
+          <string name="Hostname">10.0.0.2</string>
+          <string name="Protocol Name">Telnet</string>
+          <dword name="Port">23</dword>
+        </key>
+      </key>
+    </key>
+    <key name="console">
+      <string name="Protocol Name">Serial</string>
+      <string name="Com Port">COM3</string>
+      <dword name="Baud Rate">115200</dword>
+      <dword name="Parity">2</dword>
+      <dword name="Stop Bits">2</dword>
+      <dword name="CTS Flow">1</dword>
+    </key>
+    <key name="rlogin-box">
+      <string name="Protocol Name">RLogin</string>
+      <string name="Hostname">10.0.0.3</string>
+    </key>
+  </key>
+</VanDyke>

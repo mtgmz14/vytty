@@ -1,0 +1,26 @@
+# my hosts
+Host bastion
+    HostName bastion.example.com
+    User jump
+    Port 2222
+
+Host core-sw01 core
+    HostName 10.0.0.1
+    User admin
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_ed25519
+    LocalForward 8443 10.0.0.1:443
+    DynamicForward 1080
+
+Host web-*
+    User deploy
+
+Host db1
+    HostName=%h.db.example.com
+
+Match host *.lab
+    User lab
+
+Host *
+    User fallback
+    Port 22
