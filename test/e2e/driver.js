@@ -188,9 +188,9 @@
     await until(() => App.tabs.length === before + 1 && App.active.source.id === 's-ssh', 'the link to open the saved session');
     App.active.close(true);
 
-    step = 'export';
-    const csv = await vytty.tools.plan({ type: 'url', args: 'https://{host}/' }, App.session('s-ssh'));
-    eq(csv, { type: 'url', url: 'https://127.0.0.1/' }, 'tool plan');
+    step = 'external tools';
+    const plan = await vytty.tools.plan({ type: 'url', args: 'https://{host}/' }, App.session('s-ssh'));
+    eq(plan, { type: 'url', url: 'https://127.0.0.1/' }, 'tool plan');
 
     step = 'styles';
     for (const [style, theme] of [['compact', 'paper'], ['rounded', 'vytty-dark'], ['minimal', 'graphite']]) {
