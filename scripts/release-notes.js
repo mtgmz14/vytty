@@ -18,8 +18,8 @@ process.stdout.write(`${body}
 
 | File | |
 | --- | --- |
-| \`Vytty-${version}-portable.exe\` | Windows, one portable file (keeps its data in \`VyttyData\` next to it) |
-| \`Vytty-${version}-win-x64.zip\` | Windows, the same app as a plain folder - unzip and run \`Vytty.exe\` |
+| \`Vytty-${version}-portable.exe\` | Windows: the program itself, one file (keeps its data in \`VyttyData\` next to it) |
+| \`Vytty-${version}-win-x64.zip\` | Windows: the same file as \`Vytty.exe\` in a zip |
 | \`Vytty-${version}.AppImage\` | Linux |
 | \`SHA256SUMS.txt\` / \`.sig\` | checksums, signed for the in-app updater |
 

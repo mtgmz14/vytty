@@ -15,7 +15,7 @@
 </p>
 
 Vytty takes the parts of MobaXterm and SecureCRT that you use every day and leaves out the rest. It is one
-portable executable: no installer, no registry. Sessions, settings, the vault and logs all live in a
+small portable executable written in Rust: no installer, no registry, nothing unpacked. Sessions, settings, the vault and logs all live in a
 `VyttyData` folder next to the `.exe`, so you can carry the whole setup on a USB stick.
 
 ## Features
@@ -112,13 +112,12 @@ Grab a file from the [Releases](https://github.com/mtgmz14/vytty/releases) page:
 
 | File | |
 | --- | --- |
-| `Vytty-x.y.z-portable.exe` | one file; put it in a folder of its own (e.g. `C:\Tools\Vytty`) and run it |
-| `Vytty-x.y.z-win-x64.zip` | the same app as a plain folder: unzip and run `Vytty.exe`. **Best for work PCs** with endpoint protection - no self-extracting launcher |
+| `Vytty-x.y.z-portable.exe` | Windows: the program itself, one file. Put it in a folder of its own (e.g. `C:\Tools\Vytty`) and run it |
+| `Vytty-x.y.z-win-x64.zip` | Windows: the same file as `Vytty.exe` in a zip |
 | `Vytty-x.y.z.AppImage` | Linux |
 
-The first start creates `VyttyData` next to the program and asks you to set up the vault. The portable `.exe`
-unpacks the app once per version (~7 s) to `%LOCALAPPDATA%\Vytty\app\<version>`; every later start runs that copy
-(~1 s) and the `.exe` itself is not kept open.
+The first start creates `VyttyData` next to the program and asks you to set up the vault. On Windows Vytty uses the
+Microsoft Edge WebView2 Runtime that comes with Windows 10 and 11 (if a locked-down PC lacks it, Vytty says so).
 
 **Verifying a download.** `SHA256SUMS.txt` in every release lists the SHA-256 of each file (`Get-FileHash` on
 Windows, `sha256sum -c --ignore-missing SHA256SUMS.txt` on Linux), and `gh attestation verify <file> --repo
@@ -126,15 +125,17 @@ mtgmz14/vytty` proves the file was built by this repository's GitHub Actions wor
 
 **Updates.** Vytty checks for new releases at startup and every 6 hours and asks before it does anything. An update
 is installed only when its SHA-256 matches the release's checksum list *and* that list carries a valid Ed25519
-signature from the key built into Vytty - a modified or corrupted file is refused. The portable `.exe` is not
+signature from the key built into Vytty - a modified or corrupted file is refused. `Vytty-x.y.z-portable.exe` is not
 replaced while in use: the new version is saved next to it and started, and the old file is removed after the new
-version has started. No helper programs or scripts are involved. In **Settings → About** you can switch to *Only
+version has started (a renamed copy such as `Vytty.exe` is swapped in place). No helper programs or scripts are
+involved. In **Settings → About** you can switch to *Only
 tell me* (Vytty never downloads anything - the right choice on managed work PCs) or turn the check off. Copies
 installed with winget are updated with `winget upgrade`.
 
 **Endpoint protection (CrowdStrike, Defender).** The binaries are not code-signed yet, so machine-learning based
-scanners may flag a new release. See [docs/PODPISYWANIE.md](docs/PODPISYWANIE.md) (Polish) for what triggers it, what
-0.10 changed, free signing options and what to send to your security team.
+scanners may flag a new release. Since 0.11 there is no self-extracting launcher any more - just one executable. See
+[docs/PODPISYWANIE.md](docs/PODPISYWANIE.md) (Polish) for what triggers these alarms, free signing options and what to
+send to your security team.
 
 ## Migrating from MobaXterm, PuTTY, SecureCRT, mRemoteNG
 
@@ -196,17 +197,20 @@ reviews and approves signed releases - and the privacy statement are in [SECURIT
 
 ## Building from source
 
-Requirements: Node.js 20+ and npm.
+Requirements: Rust (stable, via [rustup](https://rustup.rs)), Node.js 20+ and npm (for the xterm.js files and the
+test tooling). On Linux also the WebKitGTK development packages (`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+libxdo-dev` on Debian / Ubuntu); on Windows the WebView2 Runtime.
 
 ```bash
 git clone https://github.com/mtgmz14/vytty.git
 cd vytty
 npm install
-npm start            # run from source (data goes to ./data)
-npm test             # unit and integration tests (SSH / Telnet against local test servers)
-npm run test:e2e     # end-to-end: drives the app without a window (Linux needs no display)
-npm run dist:win     # dist/Vytty-<version>-win-x64.zip and -portable.exe (needs NSIS for the latter)
-npm run dist:linux   # build an AppImage
+npm start            # build the UI and run a development build (data goes to ./data)
+npm run test:rust    # backends against test SSH / Telnet servers, importers, vault, updater
+npm test             # UI and release tooling tests
+npm run test:e2e     # end-to-end: drives the real app (Linux: run it under xvfb-run)
+npm run dist:win     # dist/Vytty-<version>-portable.exe and -win-x64.zip
+npm run dist:linux   # an AppImage in target/release/bundle/appimage
 ```
 
 Pushing a `v*` tag runs the tests, builds Windows and Linux binaries, starts each one once as a smoke test, attests
@@ -217,9 +221,11 @@ checksum list and its provenance, signed the list and published the release. Wit
 
 ## Tech
 
-Electron, [xterm.js](https://xtermjs.org/), [ssh2](https://github.com/mscdex/ssh2), [serialport](https://serialport.io/),
-[node-pty](https://github.com/microsoft/node-pty). The renderer is plain JavaScript with no framework and runs
-sandboxed with context isolation; all network and file access goes through a small preload API.
+Rust: [Tauri 2](https://tauri.app), [russh](https://github.com/Eugeny/russh) and russh-sftp, [tokio](https://tokio.rs),
+[serialport-rs](https://github.com/serialport/serialport-rs), [portable-pty](https://github.com/wez/wezterm/tree/main/pty),
+[reqwest](https://github.com/seanmonstar/reqwest) with rustls and the system certificate verifier. The interface is
+plain JavaScript with [xterm.js](https://xtermjs.org/) and no framework; all network and file access goes through one
+Rust command (`crates/vytty-core` holds the logic, `src-tauri` the window).
 
 ## Roadmap
 
@@ -236,8 +242,9 @@ się do jednego pliku), kopiowanie po zaznaczeniu i wklejanie prawym przyciskiem
 18 motywów w trzech stylach (Minimal, Compact, Rounded) i weryfikowane automatyczne aktualizacje (podpis Ed25519,
 bez skryptów pomocniczych, tryb „tylko powiadamiaj” dla komputerów służbowych). Import sesji z MobaXterm, PuTTY,
 SecureCRT, mRemoteNG, `~/.ssh/config` i CSV, eksport do `ssh_config`, CSV i inwentarza Ansible, synchronizacja
-z NetBoxem, obsługa linków `ssh://` / `telnet://` i „Otwórz w…” (WinSCP, PuTTY, RDP...). Wszystkie dane są
-w folderze `VyttyData` obok pliku `Vytty.exe`. Audyt wersji 0.10: [docs/AUDYT-0.10.0.md](docs/AUDYT-0.10.0.md),
+z NetBoxem, obsługa linków `ssh://` / `telnet://` i „Otwórz w…” (WinSCP, PuTTY, RDP...). Od wersji 0.11 całość jest
+napisana w Ruście (Tauri 2): na Windows to jeden mały plik `.exe`, bez instalatora i bez rozpakowywania. Wszystkie dane
+są w folderze `VyttyData` obok programu. Audyt wersji 0.10: [docs/AUDYT-0.10.0.md](docs/AUDYT-0.10.0.md),
 podpisywanie i CrowdStrike: [docs/PODPISYWANIE.md](docs/PODPISYWANIE.md).
 
 ## License
