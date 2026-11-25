@@ -347,8 +347,17 @@ async fn telnet_unreachable_times_out() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn closing_while_connecting_is_immediate() {
+    // A server that accepts the TCP connection and then never says a word.
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = silent.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut keep = vec![];
+        while let Ok((s, _)) = silent.accept().await {
+            keep.push(s);
+        }
+    });
     let h = harness(&[]);
-    h.mgr.open("c1".into(), json!({ "session": { "protocol": "ssh", "host": "10.255.255.1", "port": 22, "username": "x" } }));
+    h.mgr.open("c1".into(), json!({ "session": { "protocol": "ssh", "host": "127.0.0.1", "port": port, "username": "x" } }));
     tokio::time::sleep(Duration::from_millis(100)).await;
     h.mgr.close("c1");
     until("closed", 2000, || h.rec.closed("c1").is_some()).await;
