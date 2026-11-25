@@ -31,11 +31,13 @@ function makeZip() {
 
 try {
   if (!fs.existsSync(built)) throw new Error(`${built} not found - run cargo build --release -p vytty first`);
-  fs.rmSync(stage, { recursive: true, force: true });
+  const staged = path.join(stage, 'Vytty.exe');
   fs.mkdirSync(stage, { recursive: true });
-  fs.copyFileSync(built, path.join(stage, 'Vytty.exe'));
+  // CI signs dist/win-unpacked/Vytty.exe in place and passes that file.
+  if (path.resolve(built).toLowerCase() !== staged.toLowerCase()) fs.copyFileSync(built, staged);
+  for (const f of fs.readdirSync(stage)) if (f !== 'Vytty.exe') fs.rmSync(path.join(stage, f), { recursive: true, force: true });
   makeZip();
-  fs.copyFileSync(built, portable);
+  fs.copyFileSync(staged, portable);
   for (const f of [zip, portable]) console.log(`built ${path.relative(root, f)} (${(fs.statSync(f).size / 1048576).toFixed(1)} MB)`);
 } catch (err) {
   console.error(err.message);
