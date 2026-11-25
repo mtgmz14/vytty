@@ -1,13 +1,12 @@
 'use strict';
-require('./_setup');
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const V = require('../../src/main/update-verify');
-const KEYS = require('../../src/main/update-keys');
+const V = require('../../scripts/lib/update-verify');
+const KEYS = require('../../scripts/lib/update-keys');
 
 const pair = () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');

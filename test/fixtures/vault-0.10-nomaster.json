@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "kdf": "scrypt",
+  "mode": "none",
+  "salt": "JlQJqAyImHzhakds+BjVIg==",
+  "check": {
+    "iv": "wcBN+suJ7reEhkj1",
+    "tag": "4/RnaNQ9Pv//Xv9MBv+p+Q==",
+    "data": "yzIex/PSNevClS0QgTs="
+  },
+  "entries": {
+    "s9": {
+      "iv": "S7XmURLHxUD2Jh08",
+      "tag": "0gJk6G6Qo+OZfmWcImGXfw==",
+      "data": "z0QrdkMJxoRojxUxqom8a47AA/jzHqQ="
+    }
+  }
+}

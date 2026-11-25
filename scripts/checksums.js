@@ -6,8 +6,8 @@
 // Usage: node scripts/checksums.js <dir> [--require-signature]
 const fs = require('fs');
 const path = require('path');
-const V = require('../src/main/update-verify');
-const KEYS = require('../src/main/update-keys');
+const V = require('./lib/update-verify');
+const KEYS = require('./lib/update-keys');
 
 const RELEASE_FILE = /^Vytty-.*\.(exe|zip|AppImage)$/i;
 
@@ -29,7 +29,7 @@ async function main() {
   }
   const sig = V.sign(text, key);
   // Never publish a signature the app would reject (wrong key in the secret).
-  if (!V.verifySignature(text, sig, KEYS)) throw new Error('The signing key does not match any public key in src/main/update-keys.js');
+  if (!V.verifySignature(text, sig, KEYS)) throw new Error('The signing key does not match any public key in update-keys.json');
   fs.writeFileSync(path.join(dir, V.SIG_NAME), `${sig}\n`);
   console.log(`signed ${V.SUMS_NAME} -> ${V.SIG_NAME}`);
 }

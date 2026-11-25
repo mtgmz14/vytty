@@ -1,32 +1,91 @@
 'use strict';
-// End-to-end test: starts the real app (Electron, no window on screen) with a
-// throw-away data folder and drives the UI: vault setup, sessions, a local
-// shell, an SSH login through the host key / password dialogs (against a test
-// SSH server), interface styles and settings. Screenshots go to test/e2e/out.
-// Usage: npm run test:e2e   (Linux needs no display: --ozone-platform=headless)
+// End-to-end test: starts the real app (the Rust build in test mode) with a
+// throw-away data folder and drives the UI from inside the page (driver.js):
+// vault setup, sessions, a local shell, an SSH login through the host key and
+// password dialogs against a test SSH server, NetBox sync against a fake API,
+// ssh:// links, interface styles, settings - and checks that every icon is
+// vertically centred on the text next to it. Screenshots go to test/e2e/out.
+//
+// Usage: npm run test:e2e   (builds target/debug/vytty first when missing)
+// Linux needs a display: in CI it runs under xvfb-run.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const http = require('http');
+const { spawn, spawnSync } = require('child_process');
+const { Server, utils } = require('ssh2');
 
 const root = path.join(__dirname, '..', '..');
-const pkg = require(path.join(root, 'package.json'));
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vytty-e2e-'));
+const exe = path.join(root, 'target', 'debug', process.platform === 'win32' ? 'vytty.exe' : 'vytty');
 const out = path.join(__dirname, 'out');
 fs.mkdirSync(out, { recursive: true });
 
-// A tiny app folder whose entry installs the test driver, then loads Vytty.
-fs.writeFileSync(path.join(work, 'package.json'), JSON.stringify({ name: 'vytty', productName: 'Vytty', version: pkg.version, main: 'entry.js' }));
-fs.writeFileSync(path.join(work, 'entry.js'), `require(${JSON.stringify(path.join(__dirname, 'driver.js'))});\nrequire(${JSON.stringify(path.join(root, 'src', 'main', 'main.js'))});\n`);
+function sshServer() {
+  const srv = new Server({ hostKeys: [utils.generateKeyPairSync('ed25519').private] }, (client) => {
+    client.on('error', () => {});
+    client.on('authentication', (ctx) => (ctx.method === 'password' && ctx.username === 'admin' && ctx.password === 'e2e-pass' ? ctx.accept() : ctx.reject(['password'])));
+    client.on('ready', () => client.on('session', (accept) => {
+      const s = accept();
+      s.on('pty', (ok) => ok && ok());
+      s.on('window-change', (ok) => ok && ok());
+      s.on('shell', (ok) => {
+        const st = ok();
+        st.write('\r\nGigabitEthernet1/0/1   10.10.0.1   YES manual up   up\r\nE2E-SW1#');
+        st.on('data', (d) => st.write(d));
+      });
+    }));
+  });
+  return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+}
 
-const electron = require(path.join(root, 'node_modules', 'electron'));
-const args = [work, '--no-sandbox', '--force-device-scale-factor=1'];
-if (process.platform === 'linux') args.push('--ozone-platform=headless', '--disable-gpu');
-const res = spawnSync(electron, args, {
-  stdio: 'inherit',
-  env: { ...process.env, VYTTY_DATA_DIR: path.join(work, 'data'), VYTTY_E2E_OUT: out, ELECTRON_ENABLE_LOGGING: '' },
-  timeout: 180000,
-});
-fs.rmSync(work, { recursive: true, force: true });
-if (res.error) { console.error(res.error); process.exit(1); }
-process.exit(res.status === null ? 1 : res.status);
+// A fake NetBox API: two devices, the second one gone on the second sync.
+function netboxServer() {
+  let calls = 0;
+  const dev = (id, site) => ({ id, name: `nb-sw${id}`, display_url: `http://nb/dcim/devices/${id}/`, primary_ip: { address: `10.9.0.${id}/24` }, site: { name: site }, role: { name: 'Access' }, platform: { name: 'Cisco IOS', slug: 'ios' } });
+  const srv = http.createServer((req, res) => {
+    if (req.headers.authorization !== 'Token e2e-token') { res.writeHead(403); res.end('{}'); return; }
+    calls++;
+    const results = calls === 1 ? [dev(1, 'WAW1'), dev(2, 'KRK1')] : [dev(1, 'WAW2')];
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ count: results.length, next: null, results }));
+  });
+  return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+}
+
+(async () => {
+  if (!fs.existsSync(exe)) {
+    const b = spawnSync('cargo', ['build', '-p', 'vytty'], { cwd: root, stdio: 'inherit' });
+    if (b.status !== 0) process.exit(1);
+  }
+  const ssh = await sshServer();
+  const nb = await netboxServer();
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vytty-e2e-'));
+  const env = {
+    ...process.env,
+    VYTTY_DATA_DIR: path.join(work, 'data'),
+    VYTTY_E2E: path.join(__dirname, 'driver.js'),
+    VYTTY_E2E_OUT: out,
+    VYTTY_E2E_CONFIG: JSON.stringify({ sshPort: ssh.address().port, netboxPort: nb.address().port, platform: process.platform }),
+  };
+  const child = spawn(exe, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const pageErrors = [];
+  const onLine = (line) => {
+    if (!line.trim()) return;
+    process.stdout.write(`${line}\n`);
+    if (/\[e2e\] (page error|page rejection|console\.error)/.test(line)) pageErrors.push(line);
+  };
+  let buf = '';
+  child.stdout.on('data', (d) => { buf += d; const lines = buf.split('\n'); buf = lines.pop(); lines.forEach(onLine); });
+  child.stderr.on('data', (d) => process.stderr.write(d));
+  const timer = setTimeout(() => { console.error('[e2e] timed out'); child.kill('SIGKILL'); }, 240000);
+  const code = await new Promise((r) => child.on('exit', (c) => r(c === null ? 1 : c)));
+  clearTimeout(timer);
+  ssh.close();
+  nb.close();
+  fs.rmSync(work, { recursive: true, force: true });
+  if (pageErrors.length) {
+    console.error(`[e2e] ${pageErrors.length} error(s) in the page`);
+    process.exit(1);
+  }
+  process.exit(code);
+})();

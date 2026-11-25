@@ -355,16 +355,26 @@
     panel.addEventListener('dragleave', (ev) => {
       if (!panel.contains(ev.relatedTarget)) { panel.classList.remove('drop-hover'); clearDrop(); }
     });
-    panel.addEventListener('drop', (ev) => {
+    const uploadDropped = (locals, target) => {
+      // Ignore drops of our own temp files (a drag that started in this panel).
+      if (!locals.length || locals.every((l) => /[\\/]vytty-drag[\\/]/.test(l))) return;
+      upload(locals, App.active, target);
+    };
+    panel.addEventListener('drop', async (ev) => {
       panel.classList.remove('drop-hover');
       const target = dropRow ? join(tab.sftp.cwd, dropRow.dataset.name) : undefined;
       clearDrop();
       if (!ev.dataTransfer.files.length) return;
       ev.preventDefault();
-      const locals = [...ev.dataTransfer.files].map((f) => vytty.pathForFile(f)).filter(Boolean);
-      // Ignore drops of our own temp files (a drag that started in this panel).
-      if (locals.every((l) => /[\\/]vytty-drag[\\/]/.test(l))) return;
-      upload(locals, App.active, target);
+      const files = [...ev.dataTransfer.files];
+      uploadDropped(await vytty.pathsForFiles(files), target);
+    });
+    // Windows that report dropped files themselves (Linux) hand over paths.
+    panel.addEventListener('vytty-file-drop', (ev) => {
+      if (!usable(App.active)) return;
+      const row = rowOf(ev);
+      const target = row && row.classList.contains('dir') && !row.dataset.up ? join(tab.sftp.cwd, row.dataset.name) : undefined;
+      uploadDropped(ev.detail.paths, target);
     });
 
     // Keyboard

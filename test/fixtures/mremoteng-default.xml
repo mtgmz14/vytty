@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mrng:Connections xmlns:mrng="http://mremoteng.org" Name="Connections" Export="false" EncryptionEngine="AES" BlockCipherMode="GCM" KdfIterations="1000" FullFileEncryption="false" Protected="XQ4Vf+Tj/9RK+uHjUM3EawI5n0OdnBtLLUvr8et4h2JRQUDqyKsVOf+sNJ4STVy2e5YhDnkS9hpL0Wbpj7kTxmDe" ConfVersion="2.6">
+  <Node Name="Routers" Type="Container" Username="netops" Password="ZykxSM4nB5rrRKFbpAPJZkc1mVRjkhwv8comQtx/R037bq6T8kiFziZCojYrYVIpLvL6bWmU/TTnjTjAKg==">
+    <Node Name="r1" Type="Connection" Hostname="10.2.0.1" Protocol="SSH2" Port="22" InheritUsername="true" InheritPassword="true" Descr="edge router" />
+    <Node Name="r2" Type="Connection" Hostname="10.2.0.2" Protocol="Telnet" Port="23" Username="admin" Password="Ib4c0O6k6CMjZ/USMtLer+CPcDY9gCHB5Dr/z+LvJFRWDHRZtUvmWFy4ikYnI2hObApDhXqrN4/yhHymTQ==" />
+    <Node Name="dc-rdp" Type="Connection" Hostname="10.2.0.9" Protocol="RDP" Port="3389" />
+  </Node>
+</mrng:Connections>

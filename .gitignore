@@ -6,3 +6,5 @@ VyttyData/
 .DS_Store
 Thumbs.db
 test/e2e/out/
+/target/
+/ui/

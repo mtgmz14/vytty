@@ -1,12 +1,11 @@
 'use strict';
-require('./_setup');
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const V = require('../../src/main/update-verify');
+const V = require('../../scripts/lib/update-verify');
 const S = require('../../scripts/sign-release');
 
 const VERSION = '9.9.9';

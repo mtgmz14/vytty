@@ -26,8 +26,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const V = require('../src/main/update-verify');
-const KEYS = require('../src/main/update-keys');
+const V = require('./lib/update-verify');
+const KEYS = require('./lib/update-keys');
 
 const DEFAULT_REPO = 'mtgmz14/vytty';
 const WORKFLOW = '.github/workflows/release.yml';
@@ -166,7 +166,7 @@ async function main() {
   const o = parseArgs(process.argv.slice(2));
   const version = o.tag.slice(1);
   const pem = fs.readFileSync(o.key, 'utf8');
-  if (!KEYS.includes(publicKeyOf(pem))) throw new Error(`${o.key} is not a key Vytty trusts (src/main/update-keys.js)`);
+  if (!KEYS.includes(publicKeyOf(pem))) throw new Error(`${o.key} is not a key Vytty trusts (update-keys.json)`);
 
   const rel = JSON.parse(gh(['release', 'view', o.tag, '--repo', o.repo, '--json', 'tagName,isDraft,assets']));
   const names = rel.assets.map((a) => a.name);

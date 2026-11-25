@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/vytty-core", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.11.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mtgmz14/vytty"
+
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

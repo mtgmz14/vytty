@@ -1,0 +1,44 @@
+[package]
+name = "vytty"
+description = "Vytty - portable SSH / Telnet / Serial terminal with a session manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "vytty_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vytty"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+arboard = { version = "3", default-features = false }
+base64 = "0.22"
+open = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+tokio = { version = "1", features = ["full"] }
+vytty-core = { path = "../crates/vytty-core" }
+
+[target.'cfg(any(windows, target_os = "linux", target_os = "macos"))'.dependencies]
+drag = "2"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
+[features]
+default = ["custom-protocol"]
+# Serve the bundled UI (always: there is no dev server).
+custom-protocol = ["tauri/custom-protocol"]
