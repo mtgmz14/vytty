@@ -2,6 +2,7 @@
 //!   * the XML file of File -> Export Settings (<VanDyke><key name="Sessions">...), or
 //!   * the session folder itself (%APPDATA%\VanDyke\Config\Sessions), whose
 //!     .ini files hold lines like  S:"Hostname"=10.0.0.1  and  D:"[SSH2] Port"=00000016.
+//!
 //! Passwords are encrypted with a SecureCRT-specific scheme and are not imported.
 use super::common::{decode_text, TreeBuilder};
 use super::xml::{parse_xml, Node};

@@ -6,7 +6,7 @@ use crate::App;
 use std::sync::Arc;
 use tauri::WebviewWindow;
 use vytty_core::events::Event;
-use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2File, ICoreWebView2WebMessageReceivedEventArgs2};
+use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2File, ICoreWebView2Settings3, ICoreWebView2WebMessageReceivedEventArgs2};
 use windows::core::{Interface, HSTRING, PWSTR};
 
 pub fn check_webview2() -> Result<(), String> {
@@ -40,10 +40,18 @@ pub fn process_alive(pid: u32) -> bool {
     }
 }
 
-/// Answers "vytty-files:<req>" messages with the paths of the posted files.
+/// Answers "vytty-files:<req>" messages with the paths of the posted files,
+/// and turns off what WebView2 adds as a browser: F5 / Ctrl+R (a reload would
+/// drop every connection), Ctrl+P, its find bar and its context menu.
 pub fn install_file_path_bridge(window: &WebviewWindow, st: Arc<App>) {
     let _ = window.with_webview(move |wv| unsafe {
         let Ok(core) = wv.controller().CoreWebView2() else { return };
+        if let Ok(settings) = core.Settings() {
+            let _ = settings.SetAreDefaultContextMenusEnabled(false);
+            if let Ok(s3) = settings.cast::<ICoreWebView2Settings3>() {
+                let _ = s3.SetAreBrowserAcceleratorKeysEnabled(false);
+            }
+        }
         let st = st.clone();
         let handler = webview2_com::WebMessageReceivedEventHandler::create(Box::new(move |_sender, args| {
             let Some(args) = args else { return Ok(()) };

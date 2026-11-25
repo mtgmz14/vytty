@@ -13,7 +13,7 @@ fn cp1252_char(b: u8) -> Option<char> {
         0x89 => '‰', 0x8a => 'Š', 0x8b => '‹', 0x8c => 'Œ', 0x8e => 'Ž', 0x91 => '‘', 0x92 => '’', 0x93 => '“',
         0x94 => '”', 0x95 => '•', 0x96 => '–', 0x97 => '—', 0x98 => '˜', 0x99 => '™', 0x9a => 'š', 0x9b => '›',
         0x9c => 'œ', 0x9e => 'ž', 0x9f => 'Ÿ',
-        0x80..=0x9f => return None,
+        0x81 | 0x8d | 0x8f | 0x90 | 0x9d => return None,
         _ => b as char,
     })
 }
@@ -23,10 +23,7 @@ pub fn decode_cp1252(buf: &[u8]) -> String {
 }
 
 fn utf16(buf: &[u8], le: bool) -> String {
-    let units: Vec<u16> = buf
-        .chunks_exact(2)
-        .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
-        .collect();
+    let units: Vec<u16> = buf.as_chunks::<2>().0.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) }).collect();
     String::from_utf16_lossy(&units)
 }
 

@@ -89,12 +89,9 @@ impl Decryptor {
         if b64.is_empty() {
             return Some(String::new());
         }
-        let (first, second): (Result<String>, fn(&Self, &str) -> Result<String>) = if self.gcm {
-            (decrypt_gcm(b64, &self.password, self.iterations), |d, b| decrypt_cbc(b, &d.password))
-        } else {
-            (decrypt_cbc(b64, &self.password), |d, b| decrypt_gcm(b, &d.password, d.iterations))
-        };
-        first.or_else(|_| second(self, b64)).ok()
+        let gcm = || decrypt_gcm(b64, &self.password, self.iterations);
+        let cbc = || decrypt_cbc(b64, &self.password);
+        if self.gcm { gcm().or_else(|_| cbc()) } else { cbc().or_else(|_| gcm()) }.ok()
     }
 }
 

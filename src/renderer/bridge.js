@@ -73,6 +73,18 @@
   // Fire and forget (keystrokes, resizes, window buttons).
   const send = (ch, ...args) => { call(ch, ...args).catch(() => {}); };
 
+  // No browser context menu (Back, Reload...) where the UI shows none of its own;
+  // text fields keep theirs (cut / copy / paste).
+  window.addEventListener('contextmenu', (e) => {
+    if (e.defaultPrevented) return;
+    if (e.target.closest && e.target.closest('input, textarea, [contenteditable="true"]')) return;
+    e.preventDefault();
+  });
+  // A reload would drop every open connection.
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'r' && !(e.target.closest && e.target.closest('.xterm')))) e.preventDefault();
+  });
+
   // The custom title bar moves the window (CSS app-region is Electron-only).
   window.addEventListener('mousedown', (e) => {
     if (e.button !== 0 || e.detail > 1 || !e.target.closest) return;

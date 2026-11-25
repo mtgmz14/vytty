@@ -318,11 +318,7 @@ impl SessionLog {
                 } else if second == '[' && s.len() > 2 && ('@'..='~').contains(&ch) {
                     let seq = std::mem::take(&mut self.esc);
                     self.handle_csi(&seq);
-                } else if second == ']' && (ch == '\x07' || self.esc.ends_with("\x1b\\")) {
-                    self.esc.clear();
-                } else if matches!(second, '(' | ')') && s.len() == 3 {
-                    self.esc.clear();
-                } else if s.len() > 256 {
+                } else if (second == ']' && (ch == '\x07' || self.esc.ends_with("\x1b\\"))) || (matches!(second, '(' | ')') && s.len() == 3) || s.len() > 256 {
                     self.esc.clear();
                 }
                 continue;

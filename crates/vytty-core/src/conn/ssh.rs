@@ -154,7 +154,7 @@ fn config(mgr: &Manager, session: &Value) -> russh::client::Config {
 
 fn port_of(session: &Value) -> u16 {
     let p = num(session.get("port"));
-    if p >= 1.0 && p <= 65535.0 {
+    if (1.0..=65535.0).contains(&p) {
         p as u16
     } else {
         22

@@ -108,6 +108,9 @@ pub fn split_args(s: &str) -> Vec<String> {
     RE.captures_iter(s).map(|c| c.get(1).or(c.get(2)).or(c.get(3)).unwrap().as_str().to_string()).collect()
 }
 
+/// Downloads for dragging files out, shared by concurrent requests for the same files.
+type DragCache = Mutex<HashMap<String, Arc<tokio::sync::OnceCell<Result<Vec<String>, String>>>>>;
+
 /// Shared state of all connections.
 pub struct Manager {
     pub ui: Arc<Ui>,
@@ -116,7 +119,7 @@ pub struct Manager {
     pub settings: Arc<RwLock<Value>>,
     pub logger: Arc<Logger>,
     conns: Mutex<HashMap<String, Arc<Conn>>>,
-    pub(crate) drag_cache: Mutex<HashMap<String, Arc<tokio::sync::OnceCell<Result<Vec<String>, String>>>>>,
+    pub(crate) drag_cache: DragCache,
 }
 
 impl Manager {
