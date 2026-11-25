@@ -302,10 +302,11 @@ mod tests {
         let (v, dir) = tmp_vault();
         assert_eq!(v.status()["exists"], json!(false));
         v.create("correct horse").unwrap();
-        v.set("s1", &sec(&[("password", "p1"), ("passphrase", "")])).unwrap();
-        assert_eq!(v.get("s1").unwrap(), sec(&[("password", "p1")]), "empty values are not stored");
+        // "-" and " " never occur in base64, so these cannot show up by chance in the ciphertext.
+        v.set("s1", &sec(&[("password", "pw-1"), ("passphrase", "")])).unwrap();
+        assert_eq!(v.get("s1").unwrap(), sec(&[("password", "pw-1")]), "empty values are not stored");
         let raw = std::fs::read_to_string(dir.join("vault.json")).unwrap();
-        assert!(!raw.contains("p1") && !raw.contains("correct horse"));
+        assert!(!raw.contains("pw-1") && !raw.contains("correct horse"));
         v.lock();
         assert!(v.get("s1").unwrap_err().to_string().contains("locked"));
         assert!(v.unlock("nope").unwrap_err().to_string().contains("Wrong master password"));
@@ -313,20 +314,20 @@ mod tests {
         v.change_master("correct horse", "battery staple").unwrap();
         v.lock();
         v.unlock("battery staple").unwrap();
-        assert_eq!(v.get("s1").unwrap()["password"], json!("p1"));
+        assert_eq!(v.get("s1").unwrap()["password"], json!("pw-1"));
         let blob = v.export_secrets(&["s1".into(), "missing".into()], "export-pw").unwrap();
         v.remove("s1").unwrap();
         assert!(v.get("s1").unwrap().is_empty());
         let map: Map<String, Value> = [("s1".to_string(), json!("s2"))].into_iter().collect();
         assert!(v.import_secrets(&blob, "bad", &map).unwrap_err().to_string().contains("Wrong export password"));
         v.import_secrets(&blob, "export-pw", &map).unwrap();
-        assert_eq!(v.get("s2").unwrap()["password"], json!("p1"));
+        assert_eq!(v.get("s2").unwrap()["password"], json!("pw-1"));
         v.change_master("battery staple", "").unwrap();
         assert_eq!(v.status()["mode"], json!("none"));
         // A fresh instance (next start) opens the file written above.
         let again = Vault::new(dir.join("vault.json"));
         again.unlock("").unwrap();
-        assert_eq!(again.get("s2").unwrap()["password"], json!("p1"));
+        assert_eq!(again.get("s2").unwrap()["password"], json!("pw-1"));
         v.reset();
         assert_eq!(v.status()["exists"], json!(false));
         let _ = std::fs::remove_dir_all(dir);
