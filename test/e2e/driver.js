@@ -116,7 +116,12 @@
     await shot('01-welcome');
 
     step = 'local shell';
-    if (E.platform !== 'win32') {
+    if (E.platform === 'win32') {
+      App.emit('open-session', { id: null, name: 'ps', protocol: 'local', shell: 'powershell.exe', shellArgs: '-NoLogo -NoProfile' });
+      await until(() => App.active && App.active.state === 'connected', 'the local shell', 20000);
+      App.active.send('Write-Output ("vytty-e2e-" + (40+2))\r');
+      await until(() => termHas('vytty-e2e-42'), 'shell output', 20000);
+    } else {
       App.emit('open-session', { id: null, name: 'sh', protocol: 'local', shell: '/bin/sh', shellArgs: '' });
       await until(() => App.active && App.active.state === 'connected', 'the local shell');
       App.active.send('echo vytty-e2e-$((40+2))\r');

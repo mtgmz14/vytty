@@ -1,13 +1,13 @@
 # Changelog
 
-## 0.11.0 - 2026-11-25
+## 0.11.0 - 2026-11-26
 
 **Rewritten in Rust**
 - The whole backend - SSH, Telnet, serial and local shells, SFTP, the session store, the vault, logging, the importers
   and exporters, NetBox, ssh:// links and the updater - is now Rust instead of Electron / Node.js. The window is
   [Tauri 2](https://tauri.app) on the system web view (WebView2 on Windows, WebKitGTK on Linux); the interface is the
   same.
-- Windows: **one executable of about EXE_MB MB** instead of a 140 MB self-extracting launcher that unpacked 275 MB to
+- Windows: **one executable of about 21 MB** instead of a 140 MB self-extracting launcher that unpacked 275 MB to
   `%LOCALAPPDATA%\Vytty\app` for every version. Nothing is unpacked or installed, it starts in about a second, and
   the portable `.exe` and the `Vytty.exe` in the zip are the same file. No launcher also means one pattern less that
   endpoint protection (CrowdStrike, Defender) reacts to.
