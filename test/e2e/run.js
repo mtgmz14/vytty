@@ -82,7 +82,8 @@ function netboxServer() {
   clearTimeout(timer);
   ssh.close();
   nb.close();
-  fs.rmSync(work, { recursive: true, force: true });
+  // WebView2 helper processes may still hold their profile for a moment (Windows).
+  try { fs.rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch (err) { console.log(`[e2e] could not remove ${work}: ${err.code}`); }
   if (pageErrors.length) {
     console.error(`[e2e] ${pageErrors.length} error(s) in the page`);
     process.exit(1);
