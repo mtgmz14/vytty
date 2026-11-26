@@ -78,7 +78,7 @@ function netboxServer() {
   child.stdout.on('data', (d) => { buf += d; const lines = buf.split('\n'); buf = lines.pop(); lines.forEach(onLine); });
   child.stderr.on('data', (d) => process.stderr.write(d));
   const timer = setTimeout(() => { console.error('[e2e] timed out'); child.kill('SIGKILL'); }, 240000);
-  const code = await new Promise((r) => child.on('exit', (c) => r(c === null ? 1 : c)));
+  const code = await new Promise((r) => child.on('exit', (c, sig) => { console.log(`[e2e] app exited with ${c === null ? sig : c}`); r(c === null ? 1 : c); }));
   clearTimeout(timer);
   ssh.close();
   nb.close();

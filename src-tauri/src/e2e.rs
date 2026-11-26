@@ -24,6 +24,7 @@ pub fn start(app: &AppHandle, _st: &Arc<App>, script: &Path) {
 pub fn report(app: &AppHandle, st: &Arc<App>, kind: &str, value: &Value) -> Value {
     match kind {
         "log" => println!("[e2e] {}", value.as_str().map(String::from).unwrap_or_else(|| value.to_string())),
+        "shot" if !cfg!(target_os = "linux") => println!("[e2e] screenshot skipped (X display only)"),
         "shot" => {
             let name = value.as_str().unwrap_or("shot");
             if let Ok(out) = std::env::var("VYTTY_E2E_OUT") {
@@ -37,11 +38,13 @@ pub fn report(app: &AppHandle, st: &Arc<App>, kind: &str, value: &Value) -> Valu
             println!("[e2e] done, exit {code}");
             st.mgr.close_all();
             st.logger.flush();
-            let h = app.clone();
+            let _ = app;
+            // Exit right here with the test's code (a normal shutdown of the
+            // window can report its own code on some platforms).
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(300));
-                h.exit(code);
-                std::thread::sleep(std::time::Duration::from_secs(3));
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
                 std::process::exit(code);
             });
         }
