@@ -1,9 +1,11 @@
 name: Build & release
 
-# Every push and pull request: unit + integration tests and a headless
-# end-to-end run of the app. Tags v*: Windows and Linux builds (each started
-# once as a smoke test), signed checksums for the in-app updater, build
-# provenance attestations and the GitHub release.
+# Every push and pull request: the Rust tests (backends against test SSH /
+# Telnet servers, importers, vault compatibility, updater), the UI tests and a
+# headless end-to-end run of the real app. Tags v* (and manual runs): Windows
+# and Linux release builds, each started once as a smoke test. Tags v* also
+# get signed checksums for the in-app updater, build provenance attestations
+# and the GitHub release.
 #
 # Optional code signing (see docs/PODPISYWANIE.md) - nothing to configure for
 # unsigned builds:
@@ -11,8 +13,7 @@ name: Build & release
 #     SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG; secret SIGNPATH_API_TOKEN
 #   a .pfx certificate: secrets WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD
 #   Azure Artifact Signing: variables AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT,
-#     AZURE_SIGNING_PROFILE, AZURE_SIGNING_PUBLISHER; secrets AZURE_TENANT_ID,
-#     AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+#     AZURE_SIGNING_PROFILE; secrets AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
 # Update signing: by default the key is kept offline. The release then stays a
 # draft until `node scripts/sign-release.js <tag>`, run where the key is kept,
 # has checked the files and their provenance, signed SHA256SUMS.txt and
@@ -33,6 +34,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -42,10 +46,26 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Libraries for the Linux window (WebKitGTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev xvfb xauth imagemagick openssh-server
+      - uses: Swatinem/rust-cache@v2
       - run: npm ci
-      - run: npm test
-      - name: End-to-end test (Electron without a display)
-        run: npm run test:e2e
+      - name: UI and release tooling tests
+        run: npm test
+      - run: node scripts/build-ui.js
+      - name: Rust tests (with a real OpenSSH server for the interoperability tests)
+        env:
+          VYTTY_TEST_SSHD: /usr/sbin/sshd
+        run: cargo test --workspace --locked
+      - name: End-to-end test (the real app on a virtual display)
+        env:
+          WEBKIT_DISABLE_COMPOSITING_MODE: 1
+        run: |
+          cargo build -p vytty --locked
+          xvfb-run -a -s "-screen 0 1360x860x24" node test/e2e/run.js
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -66,7 +86,6 @@ jobs:
       AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
       AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
       AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-      AZURE_SIGNING_PUBLISHER: ${{ vars.AZURE_SIGNING_PUBLISHER }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -76,26 +95,22 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: Swatinem/rust-cache@v2
       - run: npm ci
-      - name: Install NSIS (portable launcher)
+      - run: node scripts/build-ui.js
+      - name: Build Vytty.exe
+        run: cargo build --release -p vytty --locked
+      - name: Stage Vytty.exe
         shell: pwsh
         run: |
-          if (-not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { choco install nsis -y --no-progress }
+          New-Item -ItemType Directory -Force dist\win-unpacked | Out-Null
+          Copy-Item target\release\vytty.exe dist\win-unpacked\Vytty.exe -Force
 
-      - name: Build the app folder
-        shell: pwsh
-        run: |
-          $a = @('--win', 'dir', '--x64', '--publish', 'never')
-          if ($env:AZURE_SIGNING_ENDPOINT) {
-            $a += "-c.win.azureSignOptions.endpoint=$env:AZURE_SIGNING_ENDPOINT"
-            $a += "-c.win.azureSignOptions.codeSigningAccountName=$env:AZURE_SIGNING_ACCOUNT"
-            $a += "-c.win.azureSignOptions.certificateProfileName=$env:AZURE_SIGNING_PROFILE"
-            $a += "-c.win.azureSignOptions.publisherName=$env:AZURE_SIGNING_PUBLISHER"
-          }
-          npx electron-builder @a
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      # A .pfx certificate or Azure Artifact Signing (no-op when not configured).
+      - name: Sign Vytty.exe (certificate file / Azure)
+        run: node scripts/sign-win.js dist/win-unpacked/Vytty.exe
 
-      # --- SignPath, step 1: Vytty.exe, before it is packed into the zip and the launcher
+      # SignPath.io (free code signing for open source).
       - name: Upload Vytty.exe for signing
         if: vars.SIGNPATH_ORGANIZATION_ID != ''
         id: unsigned-exe
@@ -120,47 +135,19 @@ jobs:
         shell: pwsh
         run: Copy-Item signed-exe\Vytty.exe dist\win-unpacked\Vytty.exe -Force
 
-      - name: Package (zip + portable launcher)
-        run: node scripts/package-win.js
-
-      # --- SignPath, step 2: the portable launcher
-      - name: Upload the launcher for signing
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        id: unsigned-portable
-        uses: actions/upload-artifact@v7
-        with:
-          name: unsigned-portable
-          path: dist/Vytty-*-portable.exe
-      - name: Sign the launcher (SignPath)
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
-          artifact-configuration-slug: vytty-portable
-          github-artifact-id: ${{ steps.unsigned-portable.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed-portable
-      - name: Use the signed launcher
-        if: vars.SIGNPATH_ORGANIZATION_ID != ''
-        shell: pwsh
-        run: Get-ChildItem signed-portable\*.exe | Copy-Item -Destination dist\ -Force
+      - name: Package (portable .exe + zip)
+        run: node scripts/package-win.js dist/win-unpacked/Vytty.exe
 
       - name: Smoke test (the app starts, loads its UI and exits)
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath 'dist\win-unpacked\Vytty.exe' -ArgumentList '--smoke-test' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Vytty.exe smoke test failed (exit $($p.ExitCode))" }
           $version = node -p "require('./package.json').version"
           $exe = (Get-Item "dist\Vytty-$version-portable.exe").FullName
-          Start-Process -FilePath $exe -ArgumentList '--smoke-test' -Wait
-          $dir = Join-Path $env:LOCALAPPDATA "Vytty\app\$version"
-          for ($i = 0; $i -lt 60 -and -not (Test-Path "$dir\.complete"); $i++) { Start-Sleep 1 }
-          if (-not (Test-Path "$dir\.complete")) { throw 'The portable launcher did not unpack the app' }
-          Wait-Process -Name Vytty -Timeout 90 -ErrorAction SilentlyContinue
-          Get-AuthenticodeSignature dist\win-unpacked\Vytty.exe, $exe | Format-Table Status, SignerCertificate, Path -AutoSize
+          $p = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "smoke test failed (exit $($p.ExitCode))" }
+          if (Test-Path "$env:LOCALAPPDATA\Vytty\app") { throw 'unexpected files in %LOCALAPPDATA%\Vytty\app' }
+          Get-AuthenticodeSignature $exe | Format-Table Status, SignerCertificate, Path -AutoSize
+          Get-Item $exe | Select-Object Name, Length, @{ n = 'Version'; e = { $_.VersionInfo.ProductVersion } } | Format-Table -AutoSize
 
       - uses: actions/upload-artifact@v7
         with:
@@ -170,20 +157,57 @@ jobs:
             dist/Vytty-*-portable.exe
           if-no-files-found: error
 
-  linux:
+  # The real app on Windows (WebView2, ConPTY, the SSH client) driven by the
+  # end-to-end test; a debug build, because the test mode is compiled only there.
+  e2e-windows:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
+      - uses: Swatinem/rust-cache@v2
       - run: npm ci
-      - run: npm run dist:linux
+      - run: node scripts/build-ui.js
+      - run: cargo build -p vytty --locked
+      - name: End-to-end test
+        run: node test/e2e/run.js
+
+  linux:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # The oldest supported Ubuntu: the AppImage then runs on older distributions too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Libraries for the Linux window (WebKitGTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev file xvfb xauth
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - name: Build the AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          npx tauri build --bundles appimage -- --locked
+          version=$(node -p "require('./package.json').version")
+          mkdir -p dist
+          cp target/release/bundle/appimage/*.AppImage "dist/Vytty-$version.AppImage"
+          chmod +x dist/*.AppImage
+          ls -la dist
       - name: Smoke test
-        run: dist/linux-unpacked/vytty --smoke-test --ozone-platform=headless --no-sandbox --disable-gpu
+        env:
+          WEBKIT_DISABLE_COMPOSITING_MODE: 1
+        run: xvfb-run -a dist/Vytty-*.AppImage --appimage-extract-and-run --smoke-test
       - uses: actions/upload-artifact@v7
         with:
           name: vytty-linux
@@ -192,7 +216,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux]
+    needs: [windows, e2e-windows, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write

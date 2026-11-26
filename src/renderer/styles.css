@@ -65,8 +65,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 :focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 .hidden { display: none !important; }
-.icon { display: inline-flex; align-items: center; justify-content: center; flex: none; }
+/* Icons sit on the centre line of the text next to them. A wrapper around an
+   icon must not open a text line of its own: the icon would then sit on the
+   text baseline, about 2px above the centre (test/e2e/driver.js measures it). */
+.icon { display: inline-flex; align-items: center; justify-content: center; flex: none; line-height: 0; vertical-align: middle; }
 .icon svg { display: block; }
+.qc-icon, .tree-row .proto { display: inline-flex; align-items: center; flex: none; line-height: 0; }
 .icon-spacer { width: 14px; flex: none; }
 .muted { color: var(--muted); }
 .pre { white-space: pre-wrap; word-break: break-word; }
@@ -158,6 +162,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 body.multiexec .tab.bcast-on .bcast { display: inline-flex; }
 :root[data-ui="rounded"] #tabbar { align-items: flex-end; padding: 0 6px; gap: 4px; }
 :root[data-ui="rounded"] #tabs { gap: 2px; align-items: flex-end; }
+/* The tabs sit at the bottom of the bar here: centre the + on them, not on the bar. */
+:root[data-ui="rounded"] #tab-new { align-self: flex-end; margin-bottom: calc((30px - var(--ctl-h)) / 2); }
 :root[data-ui="rounded"] .tab { height: 30px; border-radius: 7px 7px 0 0; border: 1px solid transparent; border-bottom: 0; }
 :root[data-ui="rounded"] .tab.active { background: var(--bg); border-color: var(--border); height: 31px; }
 :root[data-ui="rounded"] .tab .tab-color { left: 8px; right: 8px; top: 0; bottom: auto; width: auto; height: 2px; }
@@ -340,8 +346,8 @@ select.input { padding-right: 4px; }
 
 /* settings */
 .settings { display: flex; gap: 18px; min-height: 100%; }
-.settings-nav { flex: 0 0 156px; display: flex; flex-direction: column; gap: 1px; }
-.settings-nav button { text-align: left; padding: 0 8px; height: calc(var(--row-h) + 4px); border: 0; border-radius: var(--radius); background: transparent; color: var(--muted); cursor: pointer; display: flex; gap: 8px; align-items: center; }
+.settings-nav { flex: 0 0 172px; display: flex; flex-direction: column; gap: 1px; }
+.settings-nav button { text-align: left; padding: 0 8px; height: calc(var(--row-h) + 4px); border: 0; border-radius: var(--radius); background: transparent; color: var(--muted); cursor: pointer; display: flex; gap: 8px; align-items: center; white-space: nowrap; overflow: hidden; }
 .settings-nav button:hover { background: var(--hover); color: var(--text); }
 .settings-nav button.active { background: var(--active); color: var(--text); }
 .settings-content { flex: 1; min-width: 0; }

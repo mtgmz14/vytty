@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "kdf": "scrypt",
+  "mode": "master",
+  "salt": "cArrXZ7+Ng/ihIJtZS8AhQ==",
+  "check": {
+    "iv": "pGZze88na+DeeVOC",
+    "tag": "XOjU5RRoZOoP12BtJ9mVfg==",
+    "data": "eJAE/LpNv0a4aYmcTEA="
+  },
+  "entries": {
+    "s1": {
+      "iv": "BxgVkKeYDFcC3JuZ",
+      "tag": "rwu3QmkUpsQCw4pAdaHYVg==",
+      "data": "j+93I74Vuaxp9bFoGvP58X3oOWsACy1eqay8X1vPhr5GwCo="
+    },
+    "cred:c1": {
+      "iv": "1KvZzYtE5s267QYe",
+      "tag": "UL1XFEqNjMZotDEvGSQf6A==",
+      "data": "mTHAbx3U512S4ceQ+R471wCLtZcGLQ1aPA=="
+    }
+  }
+}

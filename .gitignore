@@ -1,8 +1,10 @@
 node_modules/
 dist/
-data/
+/data/
 VyttyData/
 *.log
 .DS_Store
 Thumbs.db
 test/e2e/out/
+/target/
+/ui/

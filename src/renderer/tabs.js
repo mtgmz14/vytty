@@ -129,12 +129,15 @@
         this.wrap.classList.add('drop-hover');
       });
       this.wrap.addEventListener('dragleave', () => this.wrap.classList.remove('drop-hover'));
-      this.wrap.addEventListener('drop', (e) => {
+      this.wrap.addEventListener('drop', async (e) => {
         this.wrap.classList.remove('drop-hover');
         if (this.source.protocol !== 'ssh' || !e.dataTransfer.files.length) return;
         e.preventDefault();
-        const files = [...e.dataTransfer.files].map((f) => vytty.pathForFile(f)).filter(Boolean);
-        App.emit('sftp-upload', this, files);
+        const files = await vytty.pathsForFiles([...e.dataTransfer.files]);
+        if (files.length) App.emit('sftp-upload', this, files);
+      });
+      this.wrap.addEventListener('vytty-file-drop', (e) => {
+        if (this.source.protocol === 'ssh' && e.detail.paths.length) App.emit('sftp-upload', this, e.detail.paths);
       });
 
       // tab header
